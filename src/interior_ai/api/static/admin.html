@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interior AI — Product Console</title>
+<style>
+  :root {
+    --paper: #FAF8F3; --panel: #FFFFFF; --ink: #21201C; --muted: #8A8578;
+    --line: #E4E0D6; --blue: #4A7FA8; --umber: #B5642F; --ok: #4E7A5A;
+    --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.5 var(--sans); }
+  .top { display:flex; align-items:baseline; gap:14px; padding: 18px 30px 0; }
+  .top h1 { font: 700 16px var(--sans); letter-spacing:.04em; text-transform: uppercase; margin:0; }
+  .top .sub { font: 400 11px var(--mono); color: var(--muted); }
+  .top a { margin-left:auto; font: 600 11px var(--sans); color: var(--blue); text-transform: uppercase; letter-spacing:.05em; }
+  main { padding: 18px 30px 80px; max-width: 1080px; }
+  section { border: 1.5px solid var(--ink); background: var(--panel); margin: 0 0 24px; }
+  section > header { display:flex; align-items:baseline; gap:10px; padding: 10px 16px; border-bottom: 1.5px solid var(--ink); }
+  section > header h2 { font: 700 15px var(--sans); margin: 0; }
+  section > header .hint { margin-left:auto; font: 400 11px var(--mono); color: var(--muted); }
+  .body { padding: 16px; }
+  label { display:block; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing:.05em; color: var(--muted); margin-bottom: 4px; }
+  input, select, textarea { font: 400 13px var(--mono); color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink); border-radius: 0; padding: 7px 9px; width: 100%; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 12px; }
+  .row > div { flex:1; min-width: 140px; }
+  .row > .narrow { flex: 0 0 110px; min-width: 110px; }
+  button { font: 600 12px var(--sans); letter-spacing:.04em; text-transform: uppercase;
+    background: var(--ink); color: var(--paper); border: 1.5px solid var(--ink); padding: 9px 18px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); }
+  button.small { padding: 5px 10px; font-size: 10.5px; }
+  button:disabled { opacity:.4; cursor: not-allowed; }
+  .drop { border: 1.5px dashed var(--muted); padding: 18px; text-align:center; color: var(--muted);
+    font: 400 12px var(--mono); cursor: pointer; background: var(--paper); }
+  .drop.has { border-style: solid; border-color: var(--ok); color: var(--ok); }
+  .note { font: 400 12px var(--mono); color: var(--muted); margin-top: 8px; }
+  .warn { color: var(--umber); }
+  .okc { color: var(--ok); }
+  .before-after { display:flex; gap:14px; margin-top: 14px; flex-wrap:wrap; }
+  .before-after figure { margin:0; flex:1; min-width: 220px; }
+  .before-after img { width:100%; height: 220px; object-fit: contain; background:#fff; border: 1.5px solid var(--ink); }
+  .before-after figcaption { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing:.05em; color: var(--muted); margin-top: 4px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+  .card { border: 1.5px solid var(--ink); background: var(--panel); padding: 10px; }
+  .card img, .card .noimg, .card .swatchbig { width:100%; height: 130px; object-fit: contain; background: #fff; border: 1px solid var(--line); display:block; }
+  .card .noimg { display:flex; align-items:center; justify-content:center; color: var(--muted); font: 400 11px var(--mono); }
+  .card h4 { margin: 8px 0 1px; font: 700 12.5px var(--sans); }
+  .card .meta { font: 400 10.5px var(--mono); color: var(--muted); }
+  .card .price { font: 600 13px var(--mono); margin: 5px 0 7px; }
+  .filter { display:flex; gap:10px; align-items:center; margin-bottom: 14px; }
+  .filter select { width: auto; }
+  .sugg { font: 600 9.5px var(--sans); text-transform: uppercase; color: var(--ok); border: 1px solid var(--ok); padding: 1px 5px; margin-left: 5px; }
+  .surface-only { display: none; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Product Console</h1><span class="sub">catalogue operations</span>
+  <a href="/ui">→ pipeline console</a>
+</div>
+<main>
+
+  <section>
+    <header><h2>Upload product</h2><span class="hint" id="caps-hint"></span></header>
+    <div class="body">
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose product photo">
+        click to choose the product photo
+        <input type="file" id="file" accept="image/jpeg,image/png,image/webp" hidden>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <div><label for="f-sku">SKU</label><input id="f-sku" placeholder="SOFA-NOVA-3S"></div>
+        <div><label for="f-name">Name</label><input id="f-name" placeholder="Nova 3-Seater"></div>
+        <div><label for="f-class">Class</label>
+          <select id="f-class">
+            <optgroup label="Objects">
+              <option>sofa</option><option>armchair</option><option>chair</option>
+              <option>coffee_table</option><option>side_table</option><option>dining_table</option>
+              <option>tv_unit</option><option>bed</option><option>wardrobe</option>
+              <option>bookshelf</option><option>cabinet</option><option>rug</option>
+              <option>lamp</option><option>ceiling_light</option><option>curtain</option>
+              <option>blinds</option><option>wall_art</option><option>mirror</option>
+              <option>plant</option><option>decor</option><option>television</option>
+              <option>ottoman</option><option>room_divider</option>
+            </optgroup>
+            <optgroup label="Surface treatments">
+              <option>wall</option><option>ceiling</option><option>floor</option>
+            </optgroup>
+          </select></div>
+      </div>
+      <div class="row">
+        <div class="narrow"><label for="f-w">Width mm</label><input id="f-w" type="number" min="1" value="1000"></div>
+        <div class="narrow"><label for="f-d">Depth mm</label><input id="f-d" type="number" min="1" value="500"></div>
+        <div class="narrow"><label for="f-h">Height mm</label><input id="f-h" type="number" min="1" value="800"></div>
+        <div class="narrow"><label for="f-price">Price INR</label><input id="f-price" type="number" min="0" value="10000"></div>
+        <div><label for="f-vendor">Vendor</label><input id="f-vendor" placeholder="optional"></div>
+      </div>
+      <div class="row">
+        <div><label for="f-desc">Description (used in the replacement prompt — mention colour, material, style)</label>
+          <input id="f-desc" placeholder="Charcoal fabric 3-seater, oak legs, boxy silhouette"></div>
+      </div>
+      <div class="row">
+        <div style="flex:0 0 auto; display:flex; align-items:center; gap:6px">
+          <input type="checkbox" id="f-sugg" style="width:auto"><label for="f-sugg" style="margin:0; text-transform:none; font-weight:400; color:var(--ink)">Suggested</label>
+        </div>
+        <div class="narrow surface-only" id="hex-wrap"><label for="f-hex">Swatch hex</label><input id="f-hex" placeholder="#C7D2C0"></div>
+      </div>
+      <button id="btn-upload">Upload + strip background</button>
+      <div class="note" id="up-note"></div>
+      <div class="before-after" id="ba" hidden>
+        <figure><img id="ba-before" alt="Uploaded photo"><figcaption>Uploaded</figcaption></figure>
+        <figure><img id="ba-after" alt="Processed cutout"><figcaption id="ba-after-cap">Stored (background stripped)</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <header><h2>Inventory</h2><span class="hint" id="inv-count"></span></header>
+    <div class="body">
+      <div class="filter">
+        <label for="filt" style="margin:0">Class</label>
+        <select id="filt"><option value="">all</option></select>
+        <button class="ghost small" id="btn-refresh">Refresh</button>
+      </div>
+      <div class="grid" id="inv"></div>
+    </div>
+  </section>
+
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let FILE = null;
+const money = v => v == null ? "—" : Number(v).toLocaleString("en-IN", {maximumFractionDigits: 2});
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  if (!r.ok) throw new Error((body && body.detail) ? JSON.stringify(body.detail).slice(0,140) : r.status);
+  return body;
+}
+
+(async () => {
+  try {
+    const c = await api("/capabilities");
+    $("caps-hint").textContent = c.path === "CLOUD_API"
+      ? "background stripping: active (Gemini)"
+      : "path " + c.path + " — no image model, originals stored unstripped";
+  } catch { $("caps-hint").textContent = ""; }
+})();
+
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+$("file").onchange = () => {
+  FILE = $("file").files[0] || null;
+  if (!FILE) return;
+  $("drop").classList.add("has");
+  $("drop").firstChild.textContent = FILE.name + " — click to change";
+};
+$("f-class").onchange = () => {
+  const isSurface = ["wall","ceiling","floor"].includes($("f-class").value);
+  $("hex-wrap").style.display = isSurface ? "block" : "none";
+};
+
+$("btn-upload").onclick = async () => {
+  if (!FILE) { $("up-note").textContent = "Choose a product photo first."; return; }
+  for (const [id, label] of [["f-sku","SKU"],["f-name","Name"]])
+    if (!$(id).value.trim()) { $("up-note").textContent = label + " is required."; return; }
+  $("btn-upload").disabled = true;
+  $("up-note").textContent = "Uploading and stripping background — image edits can take a minute…";
+  const fd = new FormData();
+  fd.append("image", FILE);
+  fd.append("sku", $("f-sku").value.trim());
+  fd.append("name", $("f-name").value.trim());
+  fd.append("object_class", $("f-class").value);
+  fd.append("width_mm", $("f-w").value);
+  fd.append("depth_mm", $("f-d").value);
+  fd.append("height_mm", $("f-h").value);
+  fd.append("display_price", $("f-price").value);
+  fd.append("description", $("f-desc").value.trim());
+  fd.append("vendor", $("f-vendor").value.trim());
+  if ($("f-sugg").checked) fd.append("suggested", "true");
+  if ($("f-hex").value.trim()) fd.append("hex", $("f-hex").value.trim());
+  try {
+    const r = await api("/catalogue/upload", {method:"POST", body: fd});
+    $("ba").hidden = false;
+    $("ba-before").src = URL.createObjectURL(FILE);
+    $("ba-after").src = r.image_url + "?ts=" + Date.now();
+    $("ba-after-cap").textContent = r.image_processed
+      ? "Stored (background stripped)" : "Stored (original — not stripped)";
+    $("up-note").innerHTML = `<span class="${r.image_processed ? "okc" : "warn"}">` +
+      `${r.sku} stored. ${r.image_processed ? "Background stripped to product-on-white." : ""}</span>` +
+      (r.notes.length ? `<br><span class="warn">${r.notes.join("<br>")}</span>` : "");
+    loadInventory();
+  } catch (e) { $("up-note").innerHTML = `<span class="warn">Upload failed: ${e.message}</span>`; }
+  $("btn-upload").disabled = false;
+};
+
+async function loadInventory() {
+  const filt = $("filt").value;
+  try {
+    const data = await api("/catalogue" + (filt ? "?object_class=" + encodeURIComponent(filt) : ""));
+    const items = data.items;
+    $("inv-count").textContent = items.length + " active product(s)";
+    const classes = [...new Set(items.map(i => i.object_class))].sort();
+    const cur = $("filt").value;
+    $("filt").innerHTML = '<option value="">all</option>' +
+      classes.map(c => `<option ${c === cur ? "selected" : ""}>${c}</option>`).join("");
+    $("inv").innerHTML = items.map(i => {
+      const sku = i.sku;
+      const tags = i.style_tags || {};
+      const img = i.has_image
+        ? `<img src="/catalogue/${encodeURIComponent(sku)}/image" alt="${i.name}" loading="lazy">`
+        : (tags.hex
+            ? `<div class="swatchbig" style="background:${tags.hex}"></div>`
+            : `<div class="noimg">no image</div>`);
+      return `<div class="card">
+        ${img}
+        <h4>${i.name}${tags.suggested ? '<span class="sugg">suggested</span>' : ""}</h4>
+        <div class="meta">${sku} · ${i.object_class}</div>
+        <div class="meta">${i.width_mm}×${i.depth_mm}×${i.height_mm} mm</div>
+        <div class="price">${i.currency} ${money(i.display_price)}</div>
+        <button class="ghost small" data-sku="${sku}">Deactivate</button>
+      </div>`;
+    }).join("") || '<p class="note">No products yet — upload one above, or run the seed.</p>';
+    $("inv").querySelectorAll("button[data-sku]").forEach(b => b.onclick = async () => {
+      if (!confirm("Deactivate " + b.dataset.sku + "?")) return;
+      const sku = b.dataset.sku;
+      await api(`/catalogue/${encodeURIComponent(sku)}/deactivate`, {method:"POST"});
+      loadInventory();
+    });
+  } catch (e) { $("inv").innerHTML = `<p class="note warn">${e.message}</p>`; }
+}
+$("btn-refresh").onclick = loadInventory;
+$("filt").onchange = loadInventory;
+loadInventory();
+</script>
+</body>
+</html>

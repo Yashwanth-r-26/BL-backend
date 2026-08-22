@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interior AI — Pipeline Console</title>
+<style>
+  /* Drafting-console tokens: paper ground, ink lines, the floor-plan
+     renderer's own window-blue and door-umber as the only accents. */
+  :root {
+    --paper: #FAF8F3;
+    --panel: #FFFFFF;
+    --ink: #21201C;
+    --muted: #8A8578;
+    --line: #E4E0D6;
+    --blue: #4A7FA8;       /* renderer window blue */
+    --umber: #B5642F;      /* renderer door umber — warnings/flags only */
+    --ok: #4E7A5A;
+    --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  a { color: var(--blue); }
+
+  .frame { display: grid; grid-template-columns: 230px 1fr; min-height: 100vh; }
+
+  /* ---- stage rail: the drawing's revision block ---- */
+  .rail {
+    border-right: 1.5px solid var(--ink); background: var(--panel);
+    padding: 20px 0 32px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  .rail h1 {
+    font: 700 15px/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase;
+    margin: 0 18px 4px;
+  }
+  .rail .sub { font: 400 11px var(--mono); color: var(--muted); margin: 0 18px 18px; }
+  .stage {
+    display: grid; grid-template-columns: 34px 1fr; align-items: baseline;
+    padding: 9px 18px 9px 14px; border-top: 1px solid var(--line);
+    cursor: pointer; text-decoration: none; color: inherit;
+  }
+  .stage:last-of-type { border-bottom: 1px solid var(--line); }
+  .stage .num { font: 600 11px var(--mono); color: var(--muted); }
+  .stage .name { font-weight: 600; font-size: 13px; }
+  .stage .status { grid-column: 2; font: 400 11px var(--mono); color: var(--muted); min-height: 15px; }
+  .stage.done .num { color: var(--ok); }
+  .stage.done .status { color: var(--ok); }
+  .stage.err .status { color: var(--umber); }
+  .stage.active { background: var(--paper); box-shadow: inset 3px 0 0 var(--blue); }
+
+  /* ---- content column ---- */
+  .content { padding: 26px 34px 80px; max-width: 980px; }
+  section { border: 1.5px solid var(--ink); background: var(--panel); margin: 0 0 26px; }
+  section > header {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 10px 16px; border-bottom: 1.5px solid var(--ink);
+  }
+  section > header .num { font: 600 12px var(--mono); color: var(--muted); }
+  section > header h2 { font: 700 15px var(--sans); margin: 0; letter-spacing: .02em; }
+  section > header .hint { margin-left: auto; font: 400 11px var(--mono); color: var(--muted); }
+  .body { padding: 16px; }
+  section.locked { opacity: .45; pointer-events: none; }
+
+  /* forms */
+  label { display: block; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
+  select, input[type=text], input[type=number] {
+    font: 400 13px var(--mono); color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink); border-radius: 0; padding: 7px 9px; width: 100%;
+  }
+  select:focus, input:focus, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 150px; }
+  button {
+    font: 600 12px var(--sans); letter-spacing: .04em; text-transform: uppercase;
+    background: var(--ink); color: var(--paper); border: 1.5px solid var(--ink);
+    padding: 9px 18px; cursor: pointer; border-radius: 0;
+  }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button + button { margin-left: 8px; }
+
+  /* file drop */
+  .drop {
+    border: 1.5px dashed var(--muted); padding: 22px; text-align: center;
+    color: var(--muted); font: 400 12px var(--mono); cursor: pointer; background: var(--paper);
+  }
+  .drop.has { border-style: solid; border-color: var(--ok); color: var(--ok); }
+
+  /* data display */
+  table { border-collapse: collapse; width: 100%; font: 400 12.5px var(--mono); }
+  th { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); text-align: left; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.r, th.r { text-align: right; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font: 400 12.5px var(--mono); }
+  .kv b { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .note { font: 400 12px var(--mono); color: var(--muted); margin-top: 10px; }
+  .warn { color: var(--umber); }
+  .okc { color: var(--ok); }
+
+  /* the ESTIMATED rubber stamp — the system's honesty flag, made literal */
+  .stamp {
+    display: inline-block; font: 800 13px var(--sans); letter-spacing: .14em;
+    color: var(--umber); border: 2.5px solid var(--umber); border-radius: 3px;
+    padding: 3px 10px; transform: rotate(-4deg); text-transform: uppercase;
+    mix-blend-mode: multiply; opacity: .85; user-select: none;
+  }
+  .stamp.measured { color: var(--ok); border-color: var(--ok); }
+
+  /* signal chips for perception */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font: 400 12px var(--mono); border: 1px solid var(--line); padding: 5px 10px; background: var(--paper); }
+  .chip b { font-weight: 600; }
+  .chip.yes b { color: var(--ok); } .chip.no b { color: var(--umber); }
+  .chip.partial b, .chip.unknown b { color: var(--blue); }
+
+  /* image + detection overlay */
+  .canvas-wrap { position: relative; display: inline-block; max-width: 100%; }
+  .canvas-wrap img { display: block; max-width: 100%; border: 1.5px solid var(--ink); }
+  .det {
+    position: absolute; border: 2px solid var(--blue); cursor: pointer;
+    background: rgba(74,127,168,.06);
+  }
+  .det:hover, .det.sel { background: rgba(74,127,168,.18); }
+  .det.sel { border-color: var(--umber); }
+  .det .tag {
+    position: absolute; top: -20px; left: -2px; white-space: nowrap;
+    font: 600 10px var(--mono); background: var(--blue); color: #fff; padding: 2px 6px;
+  }
+  .det.sel .tag { background: var(--umber); }
+
+  /* offers */
+  .offers { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 12px; }
+  .offer { border: 1.5px solid var(--ink); padding: 12px; background: var(--panel); }
+  .offer.nofit { border-style: dashed; opacity: .75; }
+  .offer h4 { margin: 0 0 2px; font: 700 13px var(--sans); }
+  .offer .dims, .offer .fitnote { font: 400 11px var(--mono); color: var(--muted); }
+  .offer .price { font: 600 14px var(--mono); margin: 6px 0 8px; }
+  .offer .fitnote { color: var(--umber); margin-bottom: 8px; }
+
+  .swaps li { font: 400 12.5px var(--mono); }
+  .imgnote { font: 400 11px var(--mono); color: var(--umber); margin-top: 6px; }
+
+  .plan-wrap { border: 1.5px solid var(--ink); background:#fff; }
+
+  /* edit stage: image + object list side by side */
+  .edit-grid { display: grid; grid-template-columns: 1fr 235px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .edit-grid { grid-template-columns: 1fr; } }
+  .objlist { border: 1.5px solid var(--ink); background: var(--panel); }
+  .objlist header { display:flex; align-items:center; gap:8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .objlist header b { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing:.05em; }
+  .objlist header label { margin: 0 0 0 auto; display:flex; align-items:center; gap:5px; text-transform:none; font-weight:400; color:var(--ink); cursor:pointer; }
+  .objlist .grp { font: 600 10px var(--sans); text-transform: uppercase; letter-spacing:.06em; color: var(--muted); padding: 8px 10px 2px; }
+  .objlist ul { list-style:none; margin:0; padding: 2px 0 8px; }
+  .objlist li { font: 400 12px var(--mono); padding: 5px 10px; cursor: pointer; border-left: 3px solid transparent; }
+  .objlist li:hover { background: var(--paper); }
+  .objlist li.sel { border-left-color: var(--umber); background: var(--paper); font-weight: 600; }
+  .det.hidden { display: none; }
+  .ask { display:flex; gap:8px; margin-top:12px; }
+  .ask input { flex:1; font: 400 13px var(--mono); background: var(--paper);
+    border: 1px solid var(--ink); padding: 8px 10px; }
+  .ask button { white-space: nowrap; }
+  .ask-hint { font: 400 11px var(--mono); color: var(--muted); margin: 6px 0 0; }
+  .offer .thumb { width: 100%; height: 120px; object-fit: contain; background: #fff; border: 1px solid var(--line); display: block; margin-bottom: 7px; }
+  .offer .sw { display:inline-block; width: 30px; height: 18px; border: 1px solid var(--ink); vertical-align: middle; margin-right: 6px; }
+  .offer .sugg { font: 600 9.5px var(--sans); text-transform: uppercase; letter-spacing:.06em; color: var(--ok); border: 1px solid var(--ok); padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
+  .current-line { font: 400 12px var(--mono); color: var(--muted); margin: 0 0 10px; }
+  .plan-wrap img { display:block; width:100%; }
+
+  @media (max-width: 760px) {
+    .frame { grid-template-columns: 1fr; }
+    .rail { position: static; height: auto; display: flex; overflow-x: auto; border-right: 0; border-bottom: 1.5px solid var(--ink); padding: 10px 8px; }
+    .rail h1, .rail .sub { display: none; }
+    .stage { border: 1px solid var(--line); min-width: 130px; }
+    .content { padding: 18px 14px 60px; }
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <!-- ============ stage rail ============ -->
+  <nav class="rail" aria-label="Pipeline stages">
+    <h1>Interior AI</h1>
+    <p class="sub">pipeline console · <a href="/admin">products</a></p>
+        <a class="stage" href="#s-setup" id="rail-setup"><span class="num">00</span><span class="name">Status</span><span class="status" id="st-setup">checking…</span></a>
+    <a class="stage" href="#s-location" id="rail-location"><span class="num">01</span><span class="name">Location</span><span class="status" id="st-location">not set</span></a>
+    <a class="stage" href="#s-photo" id="rail-photo"><span class="num">02</span><span class="name">Photo</span><span class="status" id="st-photo">no image</span></a>
+    <a class="stage" href="#s-estimate" id="rail-estimate"><span class="num">03</span><span class="name">Estimate</span><span class="status" id="st-estimate">—</span></a>
+    <a class="stage" href="#s-perceive" id="rail-perceive"><span class="num">04</span><span class="name">Perceive</span><span class="status" id="st-perceive">—</span></a>
+    <a class="stage" href="#s-questions" id="rail-questions"><span class="num">05</span><span class="name">Your brief</span><span class="status" id="st-questions">—</span></a>
+    <a class="stage" href="#s-pipeline" id="rail-pipeline"><span class="num">06</span><span class="name">Layout + quote</span><span class="status" id="st-pipeline">—</span></a>
+    <a class="stage" href="#s-plan" id="rail-plan"><span class="num">07</span><span class="name">Floor plan</span><span class="status" id="st-plan">—</span></a>
+    <a class="stage" href="#s-edit" id="rail-edit"><span class="num">08</span><span class="name">Swap objects</span><span class="status" id="st-edit">—</span></a>
+    <a class="stage" href="#s-squote" id="rail-squote"><span class="num">09</span><span class="name">Quotation</span><span class="status" id="st-squote">—</span></a>
+  </nav>
+
+  <!-- ============ content ============ -->
+  <main class="content">
+
+    <section id="s-setup">
+      <header><span class="num">00</span><h2>Status</h2><span class="hint" id="caps-hint">checking…</span></header>
+      <div class="body">
+        <div class="kv" id="status-kv"><b>Storage</b><span>checking…</span></div>
+        <p class="note" id="setup-note" style="margin-top:12px"></p>
+      </div>
+    </section>
+
+    <section id="s-location">
+      <header><span class="num">01</span><h2>Where is this room?</h2><span class="hint">drives currency, rates and room-size priors</span></header>
+      <div class="body">
+        <div class="row">
+          <div><label for="loc-country">Country</label><select id="loc-country"></select></div>
+          <div><label for="loc-city">City</label><input id="loc-city" placeholder="Bengaluru"></div>
+          <div style="flex:0 0 auto; align-self:flex-end">
+            <button id="btn-geo">Use my location</button>
+            <button id="btn-location" class="ghost">Set manually</button>
+          </div>
+        </div>
+        <div class="kv" id="loc-out" style="margin-top:10px"></div>
+        <p class="note" id="loc-note"></p>
+      </div>
+    </section>
+
+    <section id="s-photo">
+      <header><span class="num">02</span><h2>Room photo + context</h2></header>
+      <div class="body">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a room photo">
+          click to choose a room photo (jpg / png / webp)
+          <input type="file" id="file" accept="image/jpeg,image/png,image/webp" hidden>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <div><label for="region">Region</label>
+            <select id="region">
+              <option value="IN_METRO" selected>IN_METRO — Indian metro</option>
+              <option value="IN_NONMETRO">IN_NONMETRO — smaller city</option>
+              <option value="GENERIC">GENERIC</option>
+            </select></div>
+          <div><label for="housing">Housing</label>
+            <select id="housing">
+              <option value="FLAT_1BHK">1BHK flat</option>
+              <option value="FLAT_2BHK" selected>2BHK flat</option>
+              <option value="FLAT_3BHK">3BHK flat</option>
+              <option value="INDEPENDENT">Independent house</option>
+              <option value="UNKNOWN">Unknown</option>
+            </select></div>
+          <div><label for="roomname">Room name (optional)</label>
+            <input type="text" id="roomname" placeholder="Living room"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s-estimate" class="locked">
+      <header><span class="num">03</span><h2>Estimate dimensions</h2><span class="hint">model classifies type + size; priors supply numbers</span></header>
+      <div class="body">
+        <button id="btn-estimate">Estimate from photo</button>
+        <div id="estimate-out" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <section id="s-perceive" class="locked">
+      <header><span class="num">04</span><h2>Perceive construction state</h2><span class="hint">7 signals from the photo</span></header>
+      <div class="body">
+        <button id="btn-perceive">Perceive</button>
+        <div id="perceive-out" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <section id="s-questions" class="locked">
+      <header><span class="num">05</span><h2>Your brief</h2><span class="hint">shapes the quotation, not the edits</span></header>
+      <div class="body">
+        <label>What is in scope?</label>
+        <div class="chips" style="margin-bottom:12px">
+          <label class="chip"><input type="checkbox" class="q-scope" value="walls" style="width:auto"> walls</label>
+          <label class="chip"><input type="checkbox" class="q-scope" value="flooring" style="width:auto"> flooring</label>
+          <label class="chip"><input type="checkbox" class="q-scope" value="ceiling" style="width:auto"> ceiling</label>
+          <label class="chip"><input type="checkbox" class="q-scope" value="furniture" style="width:auto"> furniture</label>
+          <label class="chip"><input type="checkbox" class="q-scope" value="cabinets" style="width:auto"> cabinets</label>
+          <label class="chip"><input type="checkbox" class="q-scope" value="fixtures" style="width:auto"> lighting &amp; fixtures</label>
+        </div>
+        <div class="row">
+          <div><label for="q-quality">Quality</label>
+            <select id="q-quality"><option value="">—</option><option>budget</option><option selected>mid-range</option><option>premium</option></select></div>
+          <div><label for="q-budget">Budget in mind</label><input id="q-budget" placeholder="e.g. under 3 lakh"></div>
+          <div><label for="q-timeline">Timeline</label>
+            <select id="q-timeline"><option value="">—</option><option>as soon as possible</option><option>1–3 months</option><option>3–6 months</option><option>just exploring</option></select></div>
+          <div><label for="q-occupied">Living there during work?</label>
+            <select id="q-occupied"><option value="">—</option><option>yes</option><option>no</option></select></div>
+        </div>
+        <button id="btn-questions">Save brief</button>
+        <p class="note" id="q-note">Optional, but a quote is far better with it.</p>
+      </div>
+    </section>
+
+    <section id="s-pipeline" class="locked">
+      <header><span class="num">06</span><h2>Layout + quote</h2><span class="hint">CP-SAT solve → validate → commit → BOQ</span></header>
+      <div class="body">
+        <table id="items-table">
+          <thead><tr><th></th><th>Item</th><th>SKU</th><th class="r">W×D×H mm</th><th>Wall?</th></tr></thead>
+          <tbody>
+            <tr><td><input type="checkbox" checked data-i="0"></td><td>Milano 3-Seater Sofa</td><td>SOFA-MILANO-3S</td><td class="r">2100×880×820</td><td>—</td></tr>
+            <tr><td><input type="checkbox" checked data-i="1"></td><td>Riva Coffee Table</td><td>CT-RIVA</td><td class="r">1000×550×420</td><td>—</td></tr>
+            <tr><td><input type="checkbox" checked data-i="2"></td><td>Linea TV Unit</td><td>TV-LINEA-18</td><td class="r">1800×420×500</td><td>yes</td></tr>
+            <tr><td><input type="checkbox" data-i="3"></td><td>Pune Armchair</td><td>AC-PUNE-1</td><td class="r">780×800×900</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <div class="row" style="margin:12px 0">
+          <div style="flex:0 0 auto; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="forcephase" checked style="width:auto">
+            <label for="forcephase" style="margin:0; text-transform:none; font-weight:400; color:var(--ink)">Force phase to STYLING_RESTRUCTURE (override the gate; recorded in the log)</label>
+          </div>
+        </div>
+        <button id="btn-pipeline">Run pipeline</button>
+        <div id="pipeline-out" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <section id="s-plan" class="locked">
+      <header><span class="num">07</span><h2>Floor plan</h2><span class="hint">drawn from solved coordinates</span></header>
+      <div class="body"><div id="plan-out"><p class="note" style="margin:0">Run the pipeline first — the plan draws the committed layout.</p></div></div>
+    </section>
+
+    <section id="s-edit" class="locked">
+      <header><span class="num">08</span><h2>Swap objects in the photo</h2><span class="hint">click an object → pick a product → replaced in image</span></header>
+      <div class="body">
+        <button id="btn-detect">Detect objects</button>
+        <button id="btn-undo" class="ghost" disabled>Undo last swap</button>
+        <button id="btn-redetect" class="ghost" disabled>Re-detect objects</button>
+        <div id="edit-out" style="margin-top:14px"></div>
+        <div id="offers-out" style="margin-top:14px"></div>
+        <div id="swaps-out" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <section id="s-squote" class="locked">
+      <header><span class="num">09</span><h2>Quotation</h2><span class="hint">contractor · DIY · hybrid</span></header>
+      <div class="body">
+        <button id="btn-squote">Quick total</button>
+        <button id="btn-full-quote" class="ghost">Full quotation</button>
+        <p class="note">Quick total prices the catalogue products only. The full quotation compares before and after, estimates labour and materials for your city, and gives three ways to do it.</p>
+        <div id="squote-out" style="margin-top:14px"></div>
+        <div id="fullquote-out" style="margin-top:18px"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const S = { imageFile: null, sceneId: null, roomId: null, sessionId: null,
+            detections: [], selectedDet: null, swaps: {}, currentImage: null, showAll: false,
+            location: null, pendingLocation: null, detecting: false };
+
+/* ---------- helpers ---------- */
+function stage(name, status, cls) {
+  const rail = $("rail-" + name), st = $("st-" + name);
+  rail.classList.remove("done","err","active");
+  if (cls) rail.classList.add(cls);
+  if (status !== undefined) st.textContent = status;
+}
+function unlock(id) { $(id).classList.remove("locked"); }
+function fail(name, err) { stage(name, String(err).slice(0, 60), "err"); }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  if (!r.ok) throw new Error((body && body.detail) ? JSON.stringify(body.detail).slice(0,120) : r.status);
+  return body;
+}
+const money = v => v == null ? "—" : Number(v).toLocaleString("en-IN", {maximumFractionDigits: 2});
+
+/* ---------- 00 setup ---------- */
+(async () => {
+  try {
+    const c = await api("/capabilities");
+    $("caps-hint").textContent = "execution path: " + c.path +
+      (c.path === "MOCK" ? " (no GEMINI_API_KEY — detection and edits are mocked)" : "");
+  } catch (e) { $("caps-hint").textContent = "capabilities check failed"; }
+})();
+
+/* ---------- 00 status ----------
+   Products and prices live in the database now, so there is nothing to seed
+   from here. This panel just reports whether the data will survive a restart
+   -- the question that actually matters before a demo. Bulk loading is
+   `python -m interior_ai.db.seed_products`; single products go through the
+   product console at /admin. */
+(async () => {
+  try {
+    const [health, cfg, cat] = await Promise.all([
+      api("/health"), api("/config"), api("/catalogue"),
+    ]);
+    const durable = health.persistent;
+    const schema = health.schema || "n/a";
+    $("status-kv").innerHTML = `
+      <b>Storage</b><span class="${durable ? "okc" : "warn"}">${health.storage}${durable ? " (persists)" : " (LOST on restart)"}</span>
+      <b>Schema</b><span class="${schema === "ready" ? "okc" : "warn"}">${schema}</span>
+      <b>Products</b><span>${cat.items.length} active</span>
+      <b>Config</b><span>${cfg.dotenv_file === "none found" ? "no .env found" : cfg.dotenv_file}</span>`;
+    stage("setup", `${cat.items.length} products · ${health.storage}`, durable && cat.items.length ? "done" : "err");
+    const notes = [];
+    if (!durable) notes.push("Set DATABASE_URL in .env to keep products between restarts.");
+    if (schema !== "ready" && durable) notes.push("Run <code>alembic upgrade head</code>.");
+    if (!cat.items.length) notes.push("No products yet — load them with <code>python -m interior_ai.db.seed_products</code>, or add one at <a href=\"/admin\">/admin</a>.");
+    $("setup-note").innerHTML = notes.join("<br>") || "Ready.";
+  } catch (e) {
+    stage("setup", "status check failed", "err");
+    $("setup-note").textContent = e.message;
+  }
+})();
+
+/* ---------- 01 location ----------
+   The city decides the currency, the market a quote is priced against, and
+   which room-size prior applies -- so it also fills in a dropdown the person
+   would otherwise have to interpret. */
+(async () => {
+  try {
+    const r = await api("/regions");
+    $("loc-country").innerHTML = r.countries.map(c =>
+      `<option value="${c.code}" ${c.supported ? "" : "disabled"} ${c.code === "IN" ? "selected" : ""}>` +
+      `${c.name}${c.supported ? "" : " — not supported yet"}</option>`).join("");
+  } catch { $("loc-country").innerHTML = '<option value="IN">India</option>'; }
+})();
+
+/* The device knows where it is; asking the person to type it is asking them
+   to repeat something their phone already holds. Coordinates are resolved to
+   a city on our own server, so no geocoding service receives them. */
+$("btn-geo").onclick = () => {
+  if (!navigator.geolocation) {
+    $("loc-note").textContent = "This device cannot share a location — enter the city instead.";
+    return;
+  }
+  $("btn-geo").disabled = true;
+  $("loc-note").textContent = "Asking for location…";
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      const fix = {country: $("loc-country").value,
+                   latitude: pos.coords.latitude, longitude: pos.coords.longitude};
+      if (!S.sessionId) { S.pendingLocation = fix; $("loc-note").textContent = "Located — saving once the photo is analysed."; }
+      else await saveLocation(fix);
+      $("btn-geo").disabled = false;
+    },
+    err => {
+      $("btn-geo").disabled = false;
+      $("loc-note").textContent = err.code === 1
+        ? "Location permission denied — enter the city instead."
+        : "Could not get a location — enter the city instead.";
+    },
+    {enableHighAccuracy: false, timeout: 10000, maximumAge: 600000},
+  );
+};
+
+$("btn-location").onclick = async () => {
+  const city = $("loc-city").value.trim();
+  if (!city) { $("loc-note").textContent = "Enter a city."; return; }
+  if (!S.sessionId) { S.pendingLocation = {country: $("loc-country").value, city};
+    $("loc-out").innerHTML = `<b>City</b><span>${city}</span>`;
+    $("loc-note").textContent = "Saved — it will be applied once objects are detected.";
+    stage("location", city, "done");
+    applyPriorRegion(city);
+    return; }
+  await saveLocation({country: $("loc-country").value, city});
+};
+
+async function saveLocation(loc) {
+  try {
+    const r = await api(`/edit-sessions/${S.sessionId}/location`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(loc)});
+    S.location = r;
+    $("loc-city").value = r.city;
+    $("loc-out").innerHTML = `
+      <b>City</b><span>${r.city}, ${r.country_name}${r.source === "device" ? " (from your device)" : ""}</span>
+      <b>Market</b><span>${r.city_tier}</span>
+      <b>Currency</b><span>${r.currency} (${r.currency_symbol})</span>`;
+    $("loc-note").innerHTML = r.confident === false
+      ? `<span class="warn">Nearest known city is ${r.distance_km} km away — check this is right, or type your city.</span>`
+      : "";
+    stage("location", `${r.city} · ${r.city_tier}`, "done");
+    applyPriorRegion(r.city, r.prior_region);
+  } catch (err) { $("loc-note").innerHTML = `<span class="warn">${err.message}</span>`; }
+}
+
+/* A metro city implies the metro dimension prior. Selecting it here saves
+   asking the same question twice in different words. */
+function applyPriorRegion(city, priorRegion) {
+  const metro = priorRegion ? priorRegion === "IN_METRO"
+    : ["mumbai","delhi","bengaluru","bangalore","hyderabad","chennai","kolkata","pune","ahmedabad","noida","gurugram","gurgaon","thane"].includes(city.toLowerCase());
+  const select = $("region");
+  if (select) select.value = metro ? "IN_METRO" : "IN_NONMETRO";
+}
+
+/* Detection takes a few seconds and needs no input, so it runs while the
+   brief is being filled in rather than making the person wait for it
+   afterwards. By the time they reach the swap stage the objects are ready. */
+async function startDetectionInBackground() {
+  if (S.sessionId || S.detecting || !S.imageFile || !S.sceneId) return;
+  S.detecting = true;
+  stage("edit", "detecting in background…", "active");
+  const fd = new FormData();
+  fd.append("image", S.imageFile);
+  try {
+    const es = await api(`/scenes/${S.sceneId}/rooms/${S.roomId}/edit-session`,
+                         {method: "POST", body: fd});
+    S.sessionId = es.session_id;
+    S.detections = es.detections;
+    S.swaps = {};
+    S.currentImage = URL.createObjectURL(S.imageFile);
+    renderEditCanvas();
+    stage("edit", es.detections.length + " objects found", "done");
+    $("btn-undo").disabled = false;
+    $("btn-redetect").disabled = false;
+    unlock("s-squote");
+    if (S.pendingLocation) { await saveLocation(S.pendingLocation); S.pendingLocation = null; }
+  } catch (err) {
+    stage("edit", "detection failed", "err");
+    $("edit-out").innerHTML = `<p class="note warn">${err.message} — press Detect objects to retry.</p>`;
+  }
+  S.detecting = false;
+}
+
+/* ---------- 06 brief ---------- */
+$("btn-questions").onclick = async () => {
+  if (!S.sessionId) { $("q-note").textContent = "Detect objects first."; return; }
+  const body = {
+    scope: [...document.querySelectorAll(".q-scope:checked")].map(c => c.value),
+    quality_tier: $("q-quality").value || null,
+    budget_band: $("q-budget").value.trim() || null,
+    timeline: $("q-timeline").value || null,
+    occupied_during_work: $("q-occupied").value || null,
+  };
+  try {
+    const r = await api(`/edit-sessions/${S.sessionId}/questionnaire`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const n = Object.keys(r.questionnaire).length;
+    $("q-note").textContent = n ? "Saved — the quotation will use this." : "Nothing set yet.";
+    stage("questions", n ? `${n} answer(s)` : "—", n ? "done" : "");
+  } catch (err) { $("q-note").innerHTML = `<span class="warn">${err.message}</span>`; }
+};
+
+/* ---------- 08 full quotation ---------- */
+$("btn-full-quote").onclick = async () => {
+  if (!S.sessionId) { $("fullquote-out").innerHTML = '<p class="note">Detect objects first.</p>'; return; }
+  const btn = $("btn-full-quote");
+  btn.disabled = true;
+  const started = Date.now();
+  $("fullquote-out").innerHTML = '<p class="note" id="fq-progress">Comparing before and after, estimating for your city… 0s</p>';
+  const ticker = setInterval(() => {
+    const el = $("fq-progress");
+    if (el) el.textContent = `Comparing before and after, estimating for your city… ${Math.round((Date.now()-started)/1000)}s`;
+  }, 1000);
+  try {
+    const r = await api(`/edit-sessions/${S.sessionId}/quotation`, {method:"POST"});
+    clearInterval(ticker);
+    renderFullQuote(r);
+    stage("squote", r.status === "ok" ? "quotation ready" : r.status, r.status === "error" ? "err" : "done");
+  } catch (err) {
+    clearInterval(ticker);
+    const d = err.detail;
+    $("fullquote-out").innerHTML = `<p class="note warn">${(d && d.message) || err.message}</p>`;
+  }
+  btn.disabled = false;
+};
+
+function renderFullQuote(r) {
+  if (!r.data) {
+    $("fullquote-out").innerHTML = `<p class="note warn">${(r.notes || []).join("<br>") || "No quotation produced."}</p>`;
+    return;
+  }
+  const d = r.data, sym = d.currency_symbol || "\u20b9";
+  const m = v => v == null ? "—" : sym + Number(v).toLocaleString("en-IN", {maximumFractionDigits: 0});
+  const flag = p => p === "known"
+    ? '<span class="sugg" style="color:var(--ok);border-color:var(--ok)">known</span>'
+    : '<span class="sugg" style="color:var(--muted);border-color:var(--line)">estimated</span>';
+
+  const lines = (d.contractor?.line_items || []).map(l =>
+    `<tr><td>${l.name}${flag(l.pricing)}<br><span class="note">${l.description || ""}</span></td>
+     <td class="r">${l.quantity ?? ""} ${l.unit || ""}</td>
+     <td class="r">${m(l.unit_rate)}</td><td class="r">${m(l.total)}</td></tr>`).join("");
+
+  const steps = (d.diy?.steps || []).map(s =>
+    `<li><b>${s.title}</b> <span class="note">(${s.difficulty || ""}${s.estimated_time ? " · " + s.estimated_time : ""})</span><br>
+     <span class="note">${s.instructions}</span></li>`).join("");
+
+  const pros = (d.contractors || []).map(c =>
+    `<tr><td>${c.name}<br><span class="note">${c.specialty} · ${c.years_experience}y · ${c.rating}★</span></td>
+     <td class="r">${m(c.quote_min)}–${m(c.quote_max)}</td>
+     <td><span class="note">${c.justification || ""}</span></td></tr>`).join("");
+
+  $("fullquote-out").innerHTML = `
+    ${r.status !== "ok" ? `<p class="note warn">${(r.notes||[]).join("<br>")}</p>` : ""}
+    <p class="note">${d.room_summary || ""}</p>
+    <div class="offers" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
+      <div class="offer"><h4>Contractor</h4>
+        <div class="price">${m(d.contractor?.total)}</div>
+        <div class="dims">materials ${m(d.contractor?.materials_total)} · labour ${m(d.contractor?.labor_total)}</div>
+        <div class="dims">${d.contractor?.timeline_weeks ?? "?"} weeks</div></div>
+      <div class="offer"><h4>DIY</h4>
+        <div class="price">${m(d.diy?.materials_total)}</div>
+        <div class="dims">materials only, retail prices</div></div>
+      <div class="offer"><h4>Hybrid</h4>
+        <div class="price">${m(d.hybrid?.total)}</div>
+        <div class="dims">${(d.hybrid?.diy_tasks||[]).length} DIY · ${(d.hybrid?.hire_tasks||[]).length} hired</div></div>
+    </div>
+    ${lines ? `<h4 style="margin:18px 0 6px">Contractor breakdown</h4>
+      <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Total</th></tr></thead>
+      <tbody>${lines}</tbody></table>` : ""}
+    ${d.hybrid?.plan_summary ? `<h4 style="margin:18px 0 6px">Recommended plan</h4><p class="note">${d.hybrid.plan_summary}</p>` : ""}
+    ${(d.diy?.needs_professional||[]).length ? `<h4 style="margin:18px 0 6px">Needs a professional</h4>
+      <ul class="note">${d.diy.needs_professional.map(x=>`<li>${x}</li>`).join("")}</ul>` : ""}
+    ${steps ? `<h4 style="margin:18px 0 6px">DIY guide</h4><ol class="note">${steps}</ol>` : ""}
+    ${pros ? `<h4 style="margin:18px 0 6px">Contractors in ${r.location?.city || "your city"}</h4>
+      <table><thead><tr><th>Who</th><th class="r">Quote</th><th>Why</th></tr></thead><tbody>${pros}</tbody></table>` : ""}
+    ${(d.assumptions||[]).length ? `<p class="note" style="margin-top:14px"><b>Assumed:</b> ${d.assumptions.join("; ")}</p>` : ""}`;
+}
+
+/* ---------- 01 photo ---------- */
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+$("file").onchange = () => {
+  const f = $("file").files[0];
+  if (!f) return;
+  S.imageFile = f;
+  $("drop").classList.add("has");
+  $("drop").firstChild.textContent = f.name + " (" + Math.round(f.size/1024) + " KB) — click to change";
+  stage("photo", f.name, "done");
+  unlock("s-estimate");
+};
+
+/* ---------- 02 estimate ---------- */
+$("btn-estimate").onclick = async () => {
+  if (!S.imageFile) return;
+  stage("estimate", "running…", "active");
+  const fd = new FormData();
+  fd.append("image", S.imageFile);
+  fd.append("region", $("region").value);
+  fd.append("housing", $("housing").value);
+  if ($("roomname").value) fd.append("room_name", $("roomname").value);
+  try {
+    const e = await api("/estimate-scene", {method:"POST", body: fd});
+    S.sceneId = e.scene_id; S.roomId = e.room_id;
+    $("estimate-out").innerHTML = `
+      <div style="display:flex; align-items:flex-start; gap:18px; flex-wrap:wrap">
+        <div class="kv">
+          <b>Room type</b><span>${e.room_type} / ${e.size_bucket}</span>
+          <b>Dimensions</b><span>${e.width_mm} × ${e.depth_mm} mm · ceiling ${e.ceiling_mm} mm</span>
+          <b>Area</b><span>${e.area_m2} m²</span>
+          <b>Confidence</b><span>${e.confidence}</span>
+          <b>Basis</b><span>${e.basis}</span>
+        </div>
+        <span class="stamp">${e.dimension_source === "measured" ? "measured" : "estimated"}</span>
+      </div>
+      <p class="note warn">${e.caveat}</p>
+      ${e.notes.length ? `<p class="note">${e.notes.join("<br>")}</p>` : ""}`;
+    stage("estimate", e.width_mm + "×" + e.depth_mm + " mm (" + e.dimension_source + ")", "done");
+    unlock("s-perceive"); unlock("s-pipeline"); unlock("s-edit");
+  } catch (err) { fail("estimate", err); $("estimate-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+
+/* ---------- 03 perceive ---------- */
+$("btn-perceive").onclick = async () => {
+  stage("perceive", "running…", "active");
+  const fd = new FormData();
+  fd.append("image", S.imageFile);
+  fd.append("room_id", S.roomId);
+  try {
+    const p = await api(`/scenes/${S.sceneId}/perceive`, {method:"POST", body: fd});
+    const chips = Object.entries(p.surfaces).map(([k,v]) =>
+      `<span class="chip ${v}">${k.replace(/_/g," ")}: <b>${v}</b></span>`).join("");
+    unlock("s-questions");
+    startDetectionInBackground();
+    $("perceive-out").innerHTML = `
+      <div class="chips">${chips}</div>
+      <div class="kv" style="margin-top:12px">
+        <b>Phase</b><span>${p.phase}</span>
+        <b>Confidence</b><span>${p.phase_confidence}</span>
+        ${p.blocking_signals && p.blocking_signals.length ? `<b>Blocking</b><span class="warn">${p.blocking_signals.join(", ")}</span>` : ""}
+      </div>`;
+    stage("perceive", p.phase, "done");
+  } catch (err) { fail("perceive", err); $("perceive-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+
+/* ---------- 04 pipeline ---------- */
+const ITEMS = [
+  {sku:"SOFA-MILANO-3S", name:"Sofa", object_class:"sofa", footprint:{width_mm:2100, depth_mm:880, height_mm:820}},
+  {sku:"CT-RIVA", name:"Coffee table", object_class:"coffee_table", footprint:{width_mm:1000, depth_mm:550, height_mm:420}},
+  {sku:"TV-LINEA-18", name:"TV unit", object_class:"tv_unit", footprint:{width_mm:1800, depth_mm:420, height_mm:500}, requires_wall:true},
+  {sku:"AC-PUNE-1", name:"Armchair", object_class:"armchair", footprint:{width_mm:780, depth_mm:800, height_mm:900}},
+];
+$("btn-pipeline").onclick = async () => {
+  stage("pipeline", "solving…", "active");
+  const checked = [...document.querySelectorAll("#items-table input:checked")].map(c => ITEMS[+c.dataset.i]);
+  const body = { room_id: S.roomId, items: checked, time_limit_s: 20 };
+  if ($("forcephase").checked) body.force_phase = "STYLING_RESTRUCTURE";
+  try {
+    const r = await api(`/scenes/${S.sceneId}/pipeline`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const stages = r.stages.map(s => `<li>${s}</li>`).join("");
+    let html = `<ol class="note" style="margin:0 0 12px; padding-left:18px">${stages}</ol>`;
+    if (!r.ok) {
+      html += `<p class="note warn">Blocked: ${r.blocked_reason || "see stages"}</p>`;
+    }
+    if (r.placements && r.placements.length) {
+      html += `<table style="margin-bottom:12px"><thead><tr><th>Object</th><th>SKU</th><th class="r">Origin</th><th class="r">Yaw</th></tr></thead><tbody>` +
+        r.placements.map(p => `<tr><td>${p.object_class}</td><td>${p.sku}</td><td class="r">(${p.origin.x}, ${p.origin.y})</td><td class="r">${p.yaw}°</td></tr>`).join("") +
+        `</tbody></table>`;
+      html += `<p class="note ${r.validation.ok ? "okc" : "warn"}">Validation: ${r.validation.ok ? "passed" : "FAILED — " + r.validation.violations.join("; ")}</p>`;
+    }
+    if (r.quote) {
+      html += `<table><thead><tr><th>Line</th><th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Total</th></tr></thead><tbody>` +
+        r.quote.lines.map(l => `<tr><td>${l.description}<br><span class="note">${l.basis}</span></td>
+          <td class="r">${l.quantity}</td><td>${l.unit}</td>
+          <td class="r">${l.unit_price ? money(l.unit_price) : '<span class="warn">unpriced</span>'}</td>
+          <td class="r">${l.line_total ? money(l.line_total) : "—"}</td></tr>`).join("") +
+        `</tbody></table>
+        <p style="font:600 15px var(--mono); text-align:right; margin:10px 0 0">Total: ${r.quote.currency} ${money(r.quote.total)}${r.quote.is_complete ? "" : ' <span class="warn">(incomplete)</span>'}</p>` +
+        (r.quote.warnings.length ? `<p class="note warn">${r.quote.warnings.join("<br>")}</p>` : "");
+    }
+    $("pipeline-out").innerHTML = html;
+    stage("pipeline", r.ok ? ("total " + money(r.quote.total)) : "blocked", r.ok ? "done" : "err");
+    if (r.placements && r.placements.length) {
+      unlock("s-plan");
+      $("plan-out").innerHTML = `<div class="plan-wrap"><img alt="Floor plan of the solved layout"
+        src="/scenes/${S.sceneId}/rooms/${S.roomId}/plan.svg?ts=${Date.now()}"></div>
+        <p class="note">Drawn from the committed coordinates — every icon is where the solver placed it.</p>`;
+      stage("plan", "rendered", "done");
+    }
+  } catch (err) { fail("pipeline", err); $("pipeline-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+
+/* ---------- 06 edit session ---------- */
+$("btn-detect").onclick = async () => {
+  if (S.detecting) return;
+  stage("edit", "detecting…", "active");
+  const fd = new FormData();
+  fd.append("image", S.imageFile);
+  try {
+    const es = await api(`/scenes/${S.sceneId}/rooms/${S.roomId}/edit-session`, {method:"POST", body: fd});
+    S.sessionId = es.session_id; S.detections = es.detections; S.swaps = {};
+    S.currentImage = URL.createObjectURL(S.imageFile);
+    renderEditCanvas();
+    stage("edit", es.detections.length + " objects found", "done");
+    if (S.pendingLocation) { await saveLocation(S.pendingLocation); S.pendingLocation = null; }
+    unlock("s-questions");
+    unlock("s-squote");
+    $("btn-undo").disabled = false;
+    $("btn-redetect").disabled = false;
+  } catch (err) { fail("edit", err); $("edit-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+
+function renderEditCanvas(imgSrc, mockNote) {
+  const src = imgSrc || S.currentImage;
+  const boxes = S.detections.map(d => {
+    const [x0,y0,x1,y1] = d.box;
+    const sel = S.selectedDet && S.selectedDet.id === d.id;
+    const visible = S.showAll || sel;
+    return `<div class="det${sel ? " sel" : ""}${visible ? "" : " hidden"}" data-id="${d.id}"
+      style="left:${x0/10}%; top:${y0/10}%; width:${(x1-x0)/10}%; height:${(y1-y0)/10}%"
+      role="button" tabindex="0" aria-label="Select ${d.label}">
+      <span class="tag">${d.label}</span></div>`;
+  }).join("");
+
+  const SURFACES = ["wall","ceiling","floor"];
+  const objItems = S.detections.filter(d => !SURFACES.includes(d.object_class));
+  const surfItems = S.detections.filter(d => SURFACES.includes(d.object_class));
+  const li = d => `<li data-id="${d.id}" class="${S.selectedDet && S.selectedDet.id === d.id ? "sel" : ""}"
+    role="button" tabindex="0">${d.label}</li>`;
+
+  $("edit-out").innerHTML = `
+    <div class="edit-grid">
+      <div>
+        <div class="canvas-wrap" id="canvas">
+          <img src="${src}" alt="Room photo with detected objects">${boxes}
+        </div>
+        ${mockNote ? `<p class="imgnote">${mockNote}</p>` : ""}
+        <p class="note">Click an object or surface in the photo, or pick it from the list.</p>
+        <div class="ask">
+          <input id="ask-text" type="text" maxlength="500"
+                 placeholder="Or describe a change — &quot;paint this wall sage green&quot;, &quot;remove the lamp&quot;">
+          <button id="btn-ask">Apply</button>
+        </div>
+        <p class="ask-hint" id="ask-hint">Select an object to change just that one. With nothing selected, the request applies to the whole photo.</p>
+      </div>
+      <aside class="objlist">
+        <header><b>Identified (${S.detections.length})</b>
+          <label><input type="checkbox" id="showall" ${S.showAll ? "checked" : ""} style="width:auto"> show all</label>
+        </header>
+        ${objItems.length ? `<div class="grp">Objects (${objItems.length})</div><ul>${objItems.map(li).join("")}</ul>` : ""}
+        ${surfItems.length ? `<div class="grp">Surfaces (${surfItems.length})</div><ul>${surfItems.map(li).join("")}</ul>` : ""}
+      </aside>
+    </div>`;
+
+  const wrap = $("canvas");
+  wrap.addEventListener("click", ev => {
+    const rect = wrap.getBoundingClientRect();
+    const x = Math.round((ev.clientX - rect.left) / rect.width * 1000);
+    const y = Math.round((ev.clientY - rect.top) / rect.height * 1000);
+    selectAt({x, y});
+  });
+  $("showall").addEventListener("change", ev => {
+    S.showAll = ev.target.checked;
+    renderEditCanvas(document.querySelector("#canvas img")?.src, mockNote);
+  });
+  $("btn-ask").onclick = () => sendInstruction(false);
+  $("ask-text").addEventListener("keydown", e => {
+    if (e.key === "Enter") sendInstruction(false);
+  });
+  document.querySelectorAll(".objlist li").forEach(el => {
+    const go = () => selectAt({detection_id: el.dataset.id});
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") go(); });
+  });
+}
+
+async function selectAt(payload) {
+  try {
+    const sel = await api(`/edit-sessions/${S.sessionId}/select`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)});
+    if (!sel.hit) { $("offers-out").innerHTML = `<p class="note">Nothing selectable at that point.</p>`; return; }
+    S.selectedDet = sel.detection;
+    renderEditCanvas(document.querySelector("#canvas img")?.src);
+    const isSurface = ["wall","ceiling","floor"].includes(sel.detection.object_class);
+    const verb = sel.detection.object_class === "wall" ? "paint" :
+                 isSurface ? "finish" : sel.detection.object_class.replace(/_/g," ");
+    const offers = sel.offers.map(o => `
+      <div class="offer${o.fits_room ? "" : " nofit"}">
+        ${o.image_url ? `<img class="thumb" src="${o.image_url}" alt="${o.name}" loading="lazy">` : ""}
+        <h4>${o.swatch ? `<span class="sw" style="background:${o.swatch}"></span>` : ""}${o.name}${o.suggested ? `<span class="sugg">suggested</span>` : ""}</h4>
+        ${isSurface ? "" : `<div class="dims">${o.width_mm}×${o.depth_mm}×${o.height_mm} mm</div>`}
+        <div class="price">${o.currency} ${money(o.display_price)}</div>
+        ${o.fits_room ? "" : `<div class="fitnote">won't fit: ${o.fit_note || "too large for this room"}</div>`}
+        <button data-sku="${o.sku}" ${o.fits_room ? "" : 'class="ghost"'}>Use this ${verb}</button>
+      </div>`).join("");
+    const affects = (sel.affects || []).map(a => a.label);
+    const affectsNote = affects.length
+      ? `<p class="note" style="margin:0 0 8px">This swap covers <b>${affects.join(", ")}</b> — they'll be kept and drawn in the right order. If any goes missing, undo and try a different product.</p>`
+      : "";
+    $("offers-out").innerHTML = `
+      <p style="margin:0 0 4px"><b>${sel.detection.label}</b> selected</p>
+      ${affectsNote}
+      ${isSurface ? `<p class="current-line">Current: ${sel.detection.label}</p>` : ""}
+      ${sel.offers.length
+        ? `<div class="offers">${offers}</div>`
+        : `<p class="note">No ${verb} options in the catalogue for this yet — add items with object_class "${sel.detection.object_class}".</p>`}`;
+    $("offers-out").querySelectorAll("button").forEach(b => b.onclick = () => applySwap(b.dataset.sku));
+  } catch (err) { $("offers-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+}
+
+async function applySwap(sku, expand, confirmOversize) {
+  // An image edit runs for a minute or more. Without a visible clock the page
+  // looks hung and people click again, queueing a second edit behind the
+  // first -- so the buttons lock and the elapsed time ticks.
+  const buttons = $("offers-out").querySelectorAll("button");
+  buttons.forEach(b => b.disabled = true);
+  const started = Date.now();
+  const progress = document.createElement("p");
+  progress.className = "note";
+  progress.textContent = "Editing the photo… 0s (image edits usually take 30–90s)";
+  $("offers-out").appendChild(progress);
+  const ticker = setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000);
+    progress.textContent = s > 150
+      ? `Editing the photo… ${s}s — slower than usual; the model may be busy. It will retry automatically.`
+      : `Editing the photo… ${s}s (image edits usually take 30–90s)`;
+  }, 1000);
+  const done = () => { clearInterval(ticker); progress.remove(); buttons.forEach(b => b.disabled = false); };
+  try {
+    const st = await api(`/edit-sessions/${S.sessionId}/apply`, {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({detection_id: S.selectedDet.id, sku,
+                            expand: expand || 1.0,
+                            confirm_oversize: !!confirmOversize})});
+    done();
+    S.lastSwap = {sku, expand: expand || 1.0};
+    // The swap resized and renamed the object, so refresh the overlay from
+    // the server rather than keep drawing the box from the original detect.
+    if (st.detections && st.detections.length) S.detections = st.detections;
+    S.selectedDet = null;
+    S.swaps = st.swapped_skus;
+    if (st.result_image_ref.startsWith("data:")) {
+      renderEditCanvas(st.result_image_ref);
+    } else {
+      renderEditCanvas(null, "Mock edit (no API key) — the image is unchanged, but the swap is recorded: " + st.result_image_ref);
+    }
+    renderSwaps();
+    offerMoreRoom();
+    stage("edit", Object.keys(S.swaps).length + " swap(s) in image", "done");
+  } catch (err) {
+    done();
+    // The preflight found the product too large for this position. It is a
+    // question, not a refusal -- nothing has been generated yet, so the
+    // decision is free either way.
+    if (err.status === 409 && err.detail && err.detail.code === "oversize_replacement") {
+      const reasons = (err.detail.reasons || []).map(r => "\u2022 " + r).join("\n");
+      if (window.confirm(`${err.detail.message}\n\n${reasons}`)) {
+        return applySwap(sku, expand, true);
+      }
+      $("offers-out").innerHTML += `<p class="note">Swap cancelled — nothing was changed.</p>`;
+      return;
+    }
+    $("offers-out").innerHTML += `<p class="note warn">${err.message}</p>`;
+  }
+}
+
+/* Boxes updated after a swap are estimated from the product's dimensions.
+   This measures the edited image instead -- worth a click when a replacement
+   changed an object's shape a lot. Previous swaps survive. */
+$("btn-redetect").onclick = async () => {
+  $("btn-redetect").disabled = true;
+  const label = $("btn-redetect").textContent;
+  $("btn-redetect").textContent = "Detecting…";
+  try {
+    const r = await api(`/edit-sessions/${S.sessionId}/redetect`, {method:"POST"});
+    S.detections = r.detections.map(d => ({...d, box: d.box}));
+    S.selectedDet = null;
+    renderEditCanvas(document.querySelector("#canvas img")?.src);
+    $("offers-out").innerHTML = "";
+    stage("edit", r.count + " objects found", "done");
+  } catch (err) {
+    $("offers-out").innerHTML = `<p class="note warn">${err.message}</p>`;
+  }
+  $("btn-redetect").textContent = label;
+  $("btn-redetect").disabled = false;
+};
+
+$("btn-undo").onclick = async () => {
+  try {
+    const u = await api(`/edit-sessions/${S.sessionId}/undo`, {method:"POST"});
+    S.swaps = u.swapped_skus;
+    if (u.detections && u.detections.length) S.detections = u.detections;
+    S.selectedDet = null;
+    if (u.current_image_ref.startsWith("data:")) renderEditCanvas(u.current_image_ref);
+    else renderEditCanvas(S.currentImage, u.current_image_ref.startsWith("mock://") ? "Now showing: " + u.current_image_ref : null);
+    renderSwaps();
+    stage("edit", Object.keys(S.swaps).length + " swap(s) in image", "done");
+  } catch (err) { $("swaps-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+
+/* The editable region is derived from the object being replaced, so a
+   replacement with a very different shape can still come back clipped -- a
+   legged unit standing in for a wall-mounted one is the usual case. Rather
+   than guess harder, offer the person who can SEE the result a bigger
+   region. Undo first, so retrying replaces rather than stacks. */
+function offerMoreRoom() {
+  if (!S.lastSwap) return;
+  const wrap = document.createElement("p");
+  wrap.className = "note";
+  wrap.style.marginTop = "10px";
+  const next = Math.min(4, (S.lastSwap.expand || 1) + 1);
+  wrap.innerHTML = `Cut off at the edges? <button class="ghost" id="btn-more-room" style="padding:5px 10px;font-size:10.5px">Retry with more room</button>`;
+  $("swaps-out").appendChild(wrap);
+  $("btn-more-room").onclick = async () => {
+    const { sku } = S.lastSwap;
+    await api(`/edit-sessions/${S.sessionId}/undo`, {method:"POST"});
+    applySwap(sku, next);
+  };
+}
+
+/* A typed request is interpreted before anything is generated: which object
+   it means, and what should happen to it. That catches the common case where
+   the words describe something other than what was clicked -- asking is much
+   cheaper than a minute of image generation aimed at the wrong thing. */
+async function sendInstruction(confirmMismatch) {
+  const text = $("ask-text").value.trim();
+  if (!text) return;
+  if (!S.sessionId) { $("ask-hint").textContent = "Detect objects first."; return; }
+  const button = $("btn-ask");
+  button.disabled = true;
+  const started = Date.now();
+  $("ask-hint").textContent = "Working out what you mean…";
+  const ticker = setInterval(() => {
+    $("ask-hint").textContent = `Editing the photo… ${Math.round((Date.now()-started)/1000)}s`;
+  }, 1000);
+  try {
+    const r = await api(`/edit-sessions/${S.sessionId}/instruct`, {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({text, detection_id: S.selectedDet ? S.selectedDet.id : null,
+                            confirm_mismatch: !!confirmMismatch})});
+    clearInterval(ticker);
+    if (!r.applied) {
+      if (r.needs_confirmation && window.confirm(r.message)) {
+        button.disabled = false;
+        return sendInstruction(true);
+      }
+      $("ask-hint").textContent = r.message;
+      button.disabled = false;
+      return;
+    }
+    if (r.detections && r.detections.length) S.detections = r.detections;
+    S.swaps = r.swapped_skus || S.swaps;
+    S.selectedDet = null;
+    if (r.result_image_ref && r.result_image_ref.startsWith("data:")) {
+      renderEditCanvas(r.result_image_ref);
+    } else {
+      renderEditCanvas(null, "Mock edit (no API key) — recorded but the image is unchanged: " + r.result_image_ref);
+    }
+    renderSwaps();
+    $("ask-text").value = "";
+    $("ask-hint").textContent = `Done: ${r.intent.instruction}`;
+    stage("edit", "instruction applied", "done");
+  } catch (err) {
+    clearInterval(ticker);
+    $("ask-hint").textContent = err.message;
+  }
+  button.disabled = false;
+}
+
+function renderSwaps() {
+  const entries = Object.entries(S.swaps);
+  $("swaps-out").innerHTML = entries.length
+    ? `<b style="font:600 11px var(--sans); text-transform:uppercase; letter-spacing:.05em; color:var(--muted)">In the current image</b>
+       <ul class="swaps">${entries.map(([d, sku]) => `<li>${d} → ${sku}</li>`).join("")}</ul>`
+    : `<p class="note">No swaps in the current image.</p>`;
+}
+
+/* ---------- 07 session quote ---------- */
+$("btn-squote").onclick = async () => {
+  stage("squote", "pricing…", "active");
+  try {
+    const q = await api(`/edit-sessions/${S.sessionId}/quote`, {method:"POST"});
+    const rows = q.lines.map(l => `<tr><td>${l.description}<br><span class="note">${l.basis}</span></td>
+      <td class="r">${l.unit_price ? money(l.unit_price) : '<span class="warn">unpriced</span>'}</td>
+      <td class="r">${l.line_total ? money(l.line_total) : "—"}</td></tr>`).join("");
+    $("squote-out").innerHTML = q.lines.length
+      ? `<table><thead><tr><th>Swapped item</th><th class="r">Rate</th><th class="r">Total</th></tr></thead>
+         <tbody>${rows}</tbody></table>
+         <p style="font:600 15px var(--mono); text-align:right; margin:10px 0 0">Total: ${q.currency} ${money(q.total)}${q.is_complete ? "" : ' <span class="warn">(incomplete)</span>'}</p>` +
+        (q.warnings.length ? `<p class="note warn">${q.warnings.join("<br>")}</p>` : "")
+      : `<p class="note">No swaps to price yet — replace something in stage 06 first.</p>`;
+    stage("squote", q.lines.length ? (q.currency + " " + money(q.total)) : "no swaps", "done");
+  } catch (err) { fail("squote", err); $("squote-out").innerHTML = `<p class="note warn">${err.message}</p>`; }
+};
+</script>
+</body>
+</html>

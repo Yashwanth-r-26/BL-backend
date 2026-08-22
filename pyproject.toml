@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interior-ai"
+version = "0.1.0"
+description = "Scene-graph-driven interior design service: geometric fit checking, rules-based phase classification, CP-SAT layout optimisation, and reproducible quantity-based pricing."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "pydantic>=2.5,<3",
+    "shapely>=2.0,<3",
+    "ortools>=9.8",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "httpx>=0.26",
+    "pillow>=10.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+# Local inference. Deliberately optional: the capability probe falls through to
+# CLOUD_API or MOCK when these are absent, so the service installs and runs on
+# a laptop with no GPU and no weights.
+local = [
+    "torch>=2.1",
+    "diffusers>=0.26",
+    "transformers>=4.38",
+]
+
+[project.scripts]
+interior-ai = "interior_ai.api.app:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"interior_ai.api" = ["static/*.html"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: solver tests that may take several seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["interior_ai"]
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = false
