@@ -7,7 +7,8 @@ and come back as data URIs you can hand straight to `<Image source={{uri}} />`.
 There is no SDK to install and no socket to keep open.
 
 ---
-
+BASE URL : https://beyond-layers-backend.srq3jd.easypanel.host/
+---
 ## The shape of a session
 
 One idea carries the whole flow: **an edit session**. It is created when you
