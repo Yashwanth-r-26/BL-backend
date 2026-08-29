@@ -459,3 +459,67 @@ class CatalogueUploadOut(BaseModel):
     image_processed: bool
     image_url: str
     notes: list[str] = []
+
+# ---- accounts ------------------------------------------------------------
+
+
+class SignupIn(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(default="", max_length=80)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    created_at: str
+
+
+class AuthOut(BaseModel):
+    """A successful signup or login.
+
+    The token is a bearer credential -- the client stores it and sends it as
+    ``Authorization: Bearer <token>``. ``expires_in`` is seconds, so a client
+    can decide to re-authenticate without decoding the token itself.
+    """
+
+    token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserOut
+
+
+class SessionSummaryOut(BaseModel):
+    """One design in the account's list.
+
+    Deliberately without the image. A data URI is a couple of hundred
+    kilobytes and a list of forty of them is a payload nobody wants on mobile
+    data; the client opens a design to get its picture.
+    """
+
+    session_id: str
+    scene_id: str
+    room_id: str
+    title: str | None = None
+    city: str | None = None
+    currency_symbol: str | None = None
+    swap_count: int = 0
+    step_count: int = 0
+    created_at: str | None = None
+
+
+class SessionListOut(BaseModel):
+    sessions: list[SessionSummaryOut] = []
+
+
+class SessionClaimIn(BaseModel):
+    """Attach an existing session to the caller's account."""
+
+    session_id: str
+    title: str | None = Field(default=None, max_length=120)

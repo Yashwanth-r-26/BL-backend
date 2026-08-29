@@ -17,7 +17,7 @@ import os
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -293,6 +293,7 @@ def create_app(
     # Without it, an in-process SQLite keeps every feature working for local
     # experiments -- but it is wiped when the process exits, which is exactly
     # why an uploaded product seemed to vanish.
+    from ..db import auth as _auth_models  # noqa: F401 -- registers `users` on Base.metadata
     from ..db import catalogue as _catalogue_models  # noqa: F401 -- registers tables on Base.metadata
     from ..db.repository import create_all, make_engine, make_session_factory
 
@@ -395,7 +396,7 @@ def create_app(
                 tables = set(_inspect(app.state.db_sessionmaker.kw["bind"]).get_table_names())
             except Exception:
                 tables = set()
-            missing = {"scene_versions", "price_history", "catalogue_items"} - tables
+            missing = {"scene_versions", "price_history", "catalogue_items", "users"} - tables
             if missing:
                 info["status"] = "degraded"
                 info["schema"] = (
@@ -1227,7 +1228,11 @@ def create_app(
         status_code=201,
     )
     async def start_edit_session(
-        scene_id: str, room_id: str, image: UploadFile = File(...)
+        scene_id: str,
+        room_id: str,
+        request: Request,
+        image: UploadFile = File(...),
+        title: str = Form(""),
     ) -> S.EditSessionOut:
         """Start an interactive editing session on a room photo.
 
@@ -1254,6 +1259,12 @@ def create_app(
         data_uri = _image_to_data_uri(raw, content_type)
         editor = _make_editor()
 
+        # Resolved BEFORE the write transaction opens. _current_user opens its
+        # own database session, and on the shared-connection SQLite fallback a
+        # nested session inside an open transaction detaches the pending row --
+        # the insert is then lost and the surrounding update finds nothing.
+        owner = _current_user(request)
+
         with app.state.db_sessionmaker() as db:
             svc = EditSessionService(db, editor=editor)
             try:
@@ -1262,6 +1273,13 @@ def create_app(
                 )
             except ProviderError as exc:
                 raise HTTPException(502, f"object detection failed: {exc}")
+            # Ownership is recorded at creation when the caller is signed in.
+            # Anonymous callers still get a session -- it is simply unowned,
+            # and can be claimed later through /auth/me/sessions.
+            if owner is not None:
+                session.user_id = owner.id
+            if title.strip():
+                session.title = title.strip()[:120]
             db.commit()
             return S.EditSessionOut(
                 session_id=session.id,
@@ -1697,6 +1715,262 @@ def create_app(
                 lines=tuple(lines),
             )
             return _quote_out(quote)
+
+
+    # ---- accounts ----------------------------------------------------
+
+    def _bearer(request) -> str | None:
+        """The token out of an Authorization header, if there is one."""
+        header = request.headers.get("authorization") or ""
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer":
+            return None
+        return token.strip() or None
+
+    def _current_user(request):
+        """The caller, or None. Never raises.
+
+        Opens its own database session, so call it **before** entering another
+        one. Nesting sessions works against Postgres and silently corrupts the
+        outer transaction on the shared-connection SQLite fallback.
+
+        Optional by design. Every endpoint that existed before accounts did
+        keeps working unauthenticated, so adding auth cannot break the console
+        or any session created before this shipped.
+        """
+        from ..db.auth import UserRow, read_token
+
+        token = _bearer(request)
+        if not token:
+            return None
+        user_id = read_token(token)
+        if not user_id:
+            return None
+        with app.state.db_sessionmaker() as db:
+            user = db.get(UserRow, user_id)
+            if user is None or not user.active:
+                return None
+            # Detached but fully loaded: callers only ever read scalars.
+            db.expunge(user)
+            return user
+
+    def _require_user(request):
+        user = _current_user(request)
+        if user is None:
+            raise HTTPException(
+                401,
+                {"code": "authentication_required",
+                 "message": "Sign in to continue."},
+            )
+        return user
+
+    def _user_out(user) -> S.UserOut:
+        return S.UserOut(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name or "",
+            created_at=user.created_at.isoformat() if user.created_at else "",
+        )
+
+    def _auth_out(user) -> S.AuthOut:
+        from ..db.auth import issue_token
+
+        token, expires_in = issue_token(user.id)
+        return S.AuthOut(token=token, expires_in=expires_in, user=_user_out(user))
+
+    @router.post("/auth/signup", response_model=S.AuthOut, status_code=201)
+    def signup(body: S.SignupIn) -> S.AuthOut:
+        """Create an account and return a token.
+
+        Signing up logs you in. Making someone type the same credentials twice
+        in a row to reach the same state is ceremony, not security.
+        """
+        import uuid as _uuid
+
+        from sqlalchemy import select as _select
+
+        from ..db.auth import (
+            UserRow,
+            hash_password,
+            normalise_email,
+            validate_email,
+            validate_password,
+        )
+
+        email = normalise_email(body.email)
+        problem = validate_email(email) or validate_password(body.password)
+        if problem:
+            raise HTTPException(422, {"code": "invalid_credentials", "message": problem})
+
+        with app.state.db_sessionmaker() as db:
+            existing = db.execute(
+                _select(UserRow).where(UserRow.email == email)
+            ).scalar_one_or_none()
+            if existing is not None:
+                # 409, not 422: the request is well formed, the address is
+                # simply taken. The client turns this into "sign in instead?".
+                raise HTTPException(
+                    409,
+                    {"code": "email_taken",
+                     "message": "An account already exists for that email."},
+                )
+            user = UserRow(
+                id=_uuid.uuid4().hex,
+                email=email,
+                display_name=(body.display_name or "").strip()[:80],
+                password_hash=hash_password(body.password),
+                active=1,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
+        return _auth_out(user)
+
+    @router.post("/auth/login", response_model=S.AuthOut)
+    def login(body: S.LoginIn) -> S.AuthOut:
+        """Exchange credentials for a token.
+
+        A wrong email and a wrong password produce the same 401 with the same
+        wording, so the endpoint cannot be used to find out which addresses
+        have accounts.
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select as _select
+
+        from ..db.auth import UserRow, normalise_email, verify_password
+
+        email = normalise_email(body.email)
+        rejection = HTTPException(
+            401,
+            {"code": "invalid_login", "message": "That email and password do not match."},
+        )
+
+        with app.state.db_sessionmaker() as db:
+            user = db.execute(
+                _select(UserRow).where(UserRow.email == email)
+            ).scalar_one_or_none()
+            if user is None or not user.active:
+                raise rejection
+            if not verify_password(body.password, user.password_hash):
+                raise rejection
+            user.last_login_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
+        return _auth_out(user)
+
+    @router.get("/auth/me", response_model=S.UserOut)
+    def whoami(request: Request) -> S.UserOut:
+        return _user_out(_require_user(request))
+
+    @router.get("/auth/me/sessions", response_model=S.SessionListOut)
+    def my_sessions(request: Request) -> S.SessionListOut:
+        """Every design this account owns, newest first.
+
+        Without the images. A result data URI is a couple of hundred kilobytes
+        and forty of them is a payload nobody wants on mobile data -- opening a
+        design is what fetches its picture.
+        """
+        from sqlalchemy import select as _select
+
+        from ..db.catalogue import EditSession
+        from ..perception.edit_session import EditSessionService
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            svc = EditSessionService(db, editor=_make_editor())
+            rows = list(
+                db.execute(
+                    _select(EditSession)
+                    .where(EditSession.user_id == user.id)
+                    .order_by(EditSession.created_at.desc())
+                ).scalars()
+            )
+            summaries = []
+            for row in rows:
+                location = row.location if isinstance(row.location, dict) else {}
+                summaries.append(
+                    S.SessionSummaryOut(
+                        session_id=row.id,
+                        scene_id=row.scene_id,
+                        room_id=row.room_id,
+                        title=row.title,
+                        city=location.get("city"),
+                        currency_symbol=location.get("currency_symbol"),
+                        swap_count=len(svc.swapped_skus(row)),
+                        step_count=len(row.steps),
+                        created_at=row.created_at.isoformat() if row.created_at else None,
+                    )
+                )
+        return S.SessionListOut(sessions=summaries)
+
+    @router.post("/auth/me/sessions", response_model=S.SessionSummaryOut)
+    def claim_session(body: S.SessionClaimIn, request: Request) -> S.SessionSummaryOut:
+        """Attach an existing session to the caller.
+
+        Two things need this. A design started before signing in would
+        otherwise be stranded, and a session created against an older client
+        has no owner at all. An already-owned session cannot be taken: that
+        would make possession of an id enough to steal somebody's design.
+        """
+        from ..db.catalogue import EditSession
+        from ..perception.edit_session import EditSessionService
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            row = db.get(EditSession, body.session_id)
+            if row is None:
+                raise HTTPException(404, f"no session {body.session_id}")
+            if row.user_id and row.user_id != user.id:
+                raise HTTPException(
+                    403,
+                    {"code": "not_yours",
+                     "message": "That design belongs to another account."},
+                )
+            row.user_id = user.id
+            if body.title:
+                row.title = body.title[:120]
+            db.commit()
+            db.refresh(row)
+            svc = EditSessionService(db, editor=_make_editor())
+            location = row.location if isinstance(row.location, dict) else {}
+            return S.SessionSummaryOut(
+                session_id=row.id,
+                scene_id=row.scene_id,
+                room_id=row.room_id,
+                title=row.title,
+                city=location.get("city"),
+                currency_symbol=location.get("currency_symbol"),
+                swap_count=len(svc.swapped_skus(row)),
+                step_count=len(row.steps),
+                created_at=row.created_at.isoformat() if row.created_at else None,
+            )
+
+    @router.delete("/auth/me/sessions/{session_id}")
+    def forget_session(session_id: str, request: Request) -> dict:
+        """Remove a design from the account's list.
+
+        Unowns it rather than deleting it. The step chain is what a quote is
+        traced back to, and destroying that to tidy a list is a poor trade.
+        """
+        from ..db.catalogue import EditSession
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            row = db.get(EditSession, session_id)
+            if row is None:
+                raise HTTPException(404, f"no session {session_id}")
+            if row.user_id != user.id:
+                raise HTTPException(
+                    403,
+                    {"code": "not_yours",
+                     "message": "That design belongs to another account."},
+                )
+            row.user_id = None
+            db.commit()
+        return {"session_id": session_id, "removed": True}
 
     # ---- operator console -------------------------------------------
 
