@@ -23,6 +23,12 @@ dependencies = [
     "httpx>=0.26",
     "pillow>=10.0",
     "python-dotenv>=1.0",
+    # Accounts. bcrypt for password hashing, PyJWT for the bearer tokens.
+    # Both are imported lazily inside interior_ai.db.auth, so the package
+    # still imports without them -- but every /auth route needs them, which
+    # makes them dependencies rather than extras.
+    "bcrypt>=4.1",
+    "pyjwt>=2.8",
 ]
 
 [project.optional-dependencies]

@@ -88,6 +88,15 @@ class EditSession(Base):
     __tablename__ = "edit_sessions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    #: Who owns this design. Nullable, and deliberately so: every session
+    #: created before accounts existed has no owner, and the operator console
+    #: still creates sessions with no user at all. Ownership is a claim a
+    #: session may carry, not a requirement -- an unowned session behaves
+    #: exactly as it did before.
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    #: What to call this design in a list. Derived from the room type at
+    #: creation; the alternative is a list of identical rows.
+    title: Mapped[str | None] = mapped_column(String(120))
     scene_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     room_id: Mapped[str] = mapped_column(String(64), nullable=False)
     original_image_ref: Mapped[str] = mapped_column(Text, nullable=False)
