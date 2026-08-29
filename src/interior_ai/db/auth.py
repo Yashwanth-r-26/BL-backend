@@ -47,6 +47,10 @@ class UserRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When the password was last changed. Tokens issued before this moment are
+    #: refused, which is what makes changing a password actually sign out a
+    #: device that has a stolen one. Null means it has never been rotated.
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ------------------------------------------------------------------ hashing
@@ -143,6 +147,16 @@ def issue_token(user_id: str) -> tuple[str, int]:
 
 def read_token(token: str) -> str | None:
     """The user id in a valid token, or None. Never raises."""
+    claims = read_token_claims(token)
+    return claims[0] if claims else None
+
+
+def read_token_claims(token: str) -> tuple[str, int] | None:
+    """``(user_id, issued_at)`` from a valid token, or None. Never raises.
+
+    The issue time is what lets a password change invalidate tokens minted
+    before it -- see ``users.password_changed_at``.
+    """
     import jwt
 
     try:
@@ -150,4 +164,22 @@ def read_token(token: str) -> str | None:
     except Exception:
         return None
     subject = payload.get("sub")
-    return subject if isinstance(subject, str) and subject else None
+    issued = payload.get("iat")
+    if not isinstance(subject, str) or not subject:
+        return None
+    return subject, int(issued) if isinstance(issued, (int, float)) else 0
+
+
+def token_predates_rotation(issued_at: int, changed_at) -> bool:
+    """Whether a token was minted before the password last changed.
+
+    A one-second grace absorbs the ordering of "hash the new password" and
+    "sign the replacement token", which happen in the same request and can
+    land on either side of a second boundary.
+    """
+    if changed_at is None:
+        return False
+    from datetime import timezone as _tz
+
+    moment = changed_at if changed_at.tzinfo else changed_at.replace(tzinfo=_tz.utc)
+    return issued_at + 1 < int(moment.timestamp())

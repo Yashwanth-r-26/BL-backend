@@ -1738,17 +1738,22 @@ def create_app(
         keeps working unauthenticated, so adding auth cannot break the console
         or any session created before this shipped.
         """
-        from ..db.auth import UserRow, read_token
+        from ..db.auth import UserRow, read_token_claims, token_predates_rotation
 
         token = _bearer(request)
         if not token:
             return None
-        user_id = read_token(token)
-        if not user_id:
+        claims = read_token_claims(token)
+        if not claims:
             return None
+        user_id, issued_at = claims
         with app.state.db_sessionmaker() as db:
             user = db.get(UserRow, user_id)
             if user is None or not user.active:
+                return None
+            # A token minted before the password changed belongs to a device
+            # that has not proved it knows the new one.
+            if token_predates_rotation(issued_at, user.password_changed_at):
                 return None
             # Detached but fully loaded: callers only ever read scalars.
             db.expunge(user)
@@ -1864,6 +1869,72 @@ def create_app(
     @router.get("/auth/me", response_model=S.UserOut)
     def whoami(request: Request) -> S.UserOut:
         return _user_out(_require_user(request))
+
+    @router.patch("/auth/me", response_model=S.UserOut)
+    def update_me(body: S.ProfileUpdateIn, request: Request) -> S.UserOut:
+        """Change the caller's display name.
+
+        Trimmed and length-capped, and an empty name is allowed: it simply
+        means "no name", which the client renders as the email instead. That
+        is a real choice, not an error.
+        """
+        from ..db.auth import UserRow
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            row = db.get(UserRow, user.id)
+            if row is None:
+                raise HTTPException(404, "account not found")
+            row.display_name = (body.display_name or "").strip()[:80]
+            db.commit()
+            db.refresh(row)
+            db.expunge(row)
+        return _user_out(row)
+
+    @router.patch("/auth/me/password", response_model=S.AuthOut)
+    def change_password(body: S.PasswordUpdateIn, request: Request) -> S.AuthOut:
+        """Replace the caller's password.
+
+        Every other token for this account stops working: `password_changed_at`
+        is stamped, and `_current_user` refuses anything issued before it. The
+        caller gets a freshly-signed token back so the device doing the change
+        stays signed in -- which is why this returns an AuthOut rather than a
+        bare 204.
+        """
+        from datetime import datetime, timezone
+
+        from ..db.auth import UserRow, hash_password, validate_password, verify_password
+
+        user = _require_user(request)
+
+        problem = validate_password(body.new_password)
+        if problem:
+            raise HTTPException(422, {"code": "invalid_password", "message": problem})
+
+        with app.state.db_sessionmaker() as db:
+            row = db.get(UserRow, user.id)
+            if row is None:
+                raise HTTPException(404, "account not found")
+            if not verify_password(body.current_password, row.password_hash):
+                # 403, not 401: the token is fine, the claim about knowing the
+                # old password is not. A 401 would log the client out.
+                raise HTTPException(
+                    403,
+                    {"code": "wrong_password",
+                     "message": "That is not your current password."},
+                )
+            if verify_password(body.new_password, row.password_hash):
+                raise HTTPException(
+                    422,
+                    {"code": "password_unchanged",
+                     "message": "That is already your password."},
+                )
+            row.password_hash = hash_password(body.new_password)
+            row.password_changed_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(row)
+            db.expunge(row)
+        return _auth_out(row)
 
     @router.get("/auth/me/sessions", response_model=S.SessionListOut)
     def my_sessions(request: Request) -> S.SessionListOut:
