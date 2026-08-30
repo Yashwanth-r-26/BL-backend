@@ -512,6 +512,8 @@ class SessionSummaryOut(BaseModel):
     swap_count: int = 0
     step_count: int = 0
     created_at: str | None = None
+    #: Path to a small JPEG of the current image. Prefix the API base.
+    thumbnail_url: str | None = None
 
 
 class SessionListOut(BaseModel):
@@ -575,3 +577,34 @@ class SessionClaimBatchOut(BaseModel):
     claimed: list[str] = []
     not_yours: list[str] = []
     missing: list[str] = []
+
+
+class GoogleExchangeIn(BaseModel):
+    """Trade the one-time code from the deep link for a bearer token."""
+
+    code: str = Field(min_length=8, max_length=128)
+
+
+class FavouritesOut(BaseModel):
+    """The account's saved SKUs, newest first."""
+
+    skus: list[str] = []
+
+
+class FavouriteIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+
+
+class RoomEstimateOut(BaseModel):
+    """The room's estimated geometry, carried with its caveat.
+
+    Sent alongside a session so a client does not have to keep its own copy of
+    numbers it must never present as measurements.
+    """
+
+    width_mm: int
+    depth_mm: int
+    ceiling_mm: int
+    area_m2: float
+    dimension_source: str
+    caveat: str

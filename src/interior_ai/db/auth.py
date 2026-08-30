@@ -41,7 +41,12 @@ class UserRow(Base):
     # prevents two accounts differing only by capitalisation.
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80), nullable=False, default="")
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Null for accounts that only ever signed in through Google. A random
+    #: unusable hash would satisfy the column and then have to be recognised
+    #: as meaningless everywhere it is read; null says it plainly.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    #: Google's stable subject id, when the account is linked to one.
+    google_sub: Mapped[str | None] = mapped_column(String(64), index=True)
     active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -67,9 +72,14 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
 
 
-def verify_password(password: str, hashed: str) -> bool:
+def verify_password(password: str, hashed: str | None) -> bool:
     import bcrypt
 
+    # A Google-only account has no password. Refusing here is what makes
+    # "sign in with an email and password" impossible for it, rather than
+    # something the login endpoint has to remember to check.
+    if not hashed:
+        return False
     try:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("ascii"))
     except Exception:
