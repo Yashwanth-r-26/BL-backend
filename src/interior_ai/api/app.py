@@ -2224,8 +2224,7 @@ def create_app(
 
         if error or not code:
             return RedirectResponse(
-                g.append_code(app_redirect, "").replace("code=", "error=") + (error or "cancelled"),
-                status_code=302,
+                g.append_error(app_redirect, error or "cancelled"), status_code=302
             )
 
         try:
@@ -2233,7 +2232,13 @@ def create_app(
             claims = g.verify_id_token(tokens.get("id_token") or "")
             sub, email, name = g.identity(claims)
         except g.GoogleError as exc:
-            raise HTTPException(400, {"code": "google_failed", "message": str(exc)})
+            # Back to the app with the reason, not a 400 into a browser the
+            # person has no way out of. The only failure that still raises is
+            # an unreadable `state`, because without it there is nowhere to
+            # send them.
+            return RedirectResponse(
+                g.append_error(app_redirect, str(exc)), status_code=302
+            )
 
         with app.state.db_sessionmaker() as db:
             user = db.execute(

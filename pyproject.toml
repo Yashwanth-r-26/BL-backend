@@ -28,7 +28,11 @@ dependencies = [
     # still imports without them -- but every /auth route needs them, which
     # makes them dependencies rather than extras.
     "bcrypt>=4.1",
-    "pyjwt>=2.8",
+    # The `crypto` extra pulls in `cryptography`, which PyJWT needs for RS256.
+    # Our own tokens are HS256 and work without it, so a plain `pyjwt` install
+    # looks fine right up until Google's RS256 id_token is verified and PyJWT
+    # raises MissingCryptographyError.
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]
