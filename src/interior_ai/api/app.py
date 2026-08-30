@@ -2019,6 +2019,42 @@ def create_app(
                 created_at=row.created_at.isoformat() if row.created_at else None,
             )
 
+    @router.post("/auth/me/sessions/claim", response_model=S.SessionClaimBatchOut)
+    def claim_sessions(body: S.SessionClaimBatchIn, request: Request) -> S.SessionClaimBatchOut:
+        """Adopt several sessions in one request.
+
+        Unlike the single-session claim this never raises for an individual
+        id: a sweep that aborts on the first session belonging to somebody
+        else would leave the rest of a person's designs unadopted. Each id is
+        reported instead, and the caller decides what to do about it.
+
+        Already-owned ids come back as claimed, so re-running the sweep is
+        harmless.
+        """
+        from ..db.catalogue import EditSession
+
+        user = _require_user(request)
+        claimed: list[str] = []
+        not_yours: list[str] = []
+        missing: list[str] = []
+
+        with app.state.db_sessionmaker() as db:
+            for session_id in dict.fromkeys(body.session_ids):
+                row = db.get(EditSession, session_id)
+                if row is None:
+                    missing.append(session_id)
+                    continue
+                if row.user_id and row.user_id != user.id:
+                    not_yours.append(session_id)
+                    continue
+                row.user_id = user.id
+                claimed.append(session_id)
+            db.commit()
+
+        return S.SessionClaimBatchOut(
+            claimed=claimed, not_yours=not_yours, missing=missing
+        )
+
     @router.delete("/auth/me/sessions/{session_id}")
     def forget_session(session_id: str, request: Request) -> dict:
         """Remove a design from the account's list.

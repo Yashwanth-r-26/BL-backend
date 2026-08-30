@@ -549,3 +549,29 @@ class SessionClaimIn(BaseModel):
 
     session_id: str
     title: str | None = Field(default=None, max_length=120)
+
+
+class SessionClaimBatchIn(BaseModel):
+    """Adopt several sessions at once.
+
+    A client that has been used signed-out accumulates local designs, and on
+    sign-in every one of them needs adopting. One request per session is a
+    round trip per design on whatever connection the person happens to have;
+    this is the same work in one.
+    """
+
+    session_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class SessionClaimBatchOut(BaseModel):
+    """What happened to each id.
+
+    Split three ways because the client acts differently on each: `claimed`
+    are now the caller's, `not_yours` belong to somebody else, and `missing`
+    no longer exist. The last two are what let a device prune local pointers
+    that can never resolve, instead of retrying them on every launch.
+    """
+
+    claimed: list[str] = []
+    not_yours: list[str] = []
+    missing: list[str] = []
