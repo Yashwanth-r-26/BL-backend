@@ -171,6 +171,10 @@ def verify_id_token(id_token: str, *, verifier=None) -> dict:
             algorithms=["RS256"],
             audience=client_id(),
             issuer=list(ISSUERS),
+            # Google's clock and ours are not the same clock. Without leeway a
+            # token issued a second "in the future" is rejected outright, which
+            # would fail intermittently and look like nothing at all.
+            leeway=30,
         )
     except Exception as exc:
         raise GoogleError(f"that Google sign-in could not be verified: {exc}") from exc
@@ -202,3 +206,15 @@ def append_code(app_redirect: str, code: str) -> str:
     """Attach the one-time code to the app's deep link."""
     joiner = "&" if "?" in app_redirect else "?"
     return f"{app_redirect}{joiner}{urlencode({'code': code})}"
+
+
+def append_error(app_redirect: str, message: str) -> str:
+    """Send a failure back to the app rather than into the browser.
+
+    Whatever goes wrong here happens inside an in-app browser the person
+    cannot debug: a 400 leaves them staring at raw JSON with no way forward
+    but the back gesture. Handing the reason to the app means it can say
+    something and let them try again.
+    """
+    joiner = "&" if "?" in app_redirect else "?"
+    return f"{app_redirect}{joiner}{urlencode({'error': message[:300]})}"
