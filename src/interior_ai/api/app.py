@@ -294,6 +294,7 @@ def create_app(
     # experiments -- but it is wiped when the process exits, which is exactly
     # why an uploaded product seemed to vanish.
     from ..db import auth as _auth_models  # noqa: F401 -- registers `users` on Base.metadata
+    from ..db import favourites as _fav_models  # noqa: F401 -- favourites + oauth codes
     from ..db import catalogue as _catalogue_models  # noqa: F401 -- registers tables on Base.metadata
     from ..db.repository import create_all, make_engine, make_session_factory
 
@@ -1641,6 +1642,60 @@ def create_app(
                 "detections": session.detections,
             }
 
+    @router.get("/edit-sessions/{session_id}/thumbnail")
+    def session_thumbnail(session_id: str, request: Request, size: int = 256) -> Response:
+        """A small JPEG of the design's current image.
+
+        Exists so a list of designs can show pictures. The session's own image
+        is a data URI of a couple of hundred kilobytes; returning one per row
+        would make the list payload tens of megabytes, so the thumbnail is
+        produced here and cached by the client.
+
+        Ownership is checked when the session has an owner -- otherwise a
+        design's picture would be readable by anyone who guessed its id, which
+        is a lower bar than the design itself deserves.
+        """
+        import base64 as _b64
+        import io as _io
+
+        from ..perception.edit_session import EditSessionService
+
+        size = max(64, min(size, 512))
+        caller = _current_user(request)
+
+        with app.state.db_sessionmaker() as db:
+            svc = EditSessionService(db, editor=_make_editor())
+            session = svc.get(session_id)
+            if session is None:
+                raise HTTPException(404, f"no session {session_id}")
+            if session.user_id and (caller is None or caller.id != session.user_id):
+                raise HTTPException(403, "that design belongs to another account")
+            image_ref = svc.current_image(session)
+
+        if not image_ref.startswith("data:"):
+            raise HTTPException(404, "no image stored for that session")
+        try:
+            from PIL import Image as _Image
+
+            raw = _b64.b64decode(image_ref.partition(",")[2])
+            img = _Image.open(_io.BytesIO(raw))
+            img.thumbnail((size, size))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            out = _io.BytesIO()
+            img.save(out, format="JPEG", quality=82)
+            body = out.getvalue()
+        except Exception as exc:
+            raise HTTPException(500, f"could not render a thumbnail: {exc}")
+
+        return Response(
+            content=body,
+            media_type="image/jpeg",
+            # The image changes only when a step is applied, and the client
+            # busts this by refetching the session. An hour is cheap.
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
     @router.get("/edit-sessions/{session_id}")
     def get_session(session_id: str) -> dict:
         from ..perception.edit_session import EditSessionService
@@ -1650,11 +1705,41 @@ def create_app(
             session = svc.get(session_id)
             if session is None:
                 raise HTTPException(404, f"no session {session_id}")
+            # The room's estimate lives on the scene, and the location on the
+            # session. Both were being kept on the device because this
+            # response omitted them; an accounts-only app has nowhere local to
+            # keep them, so they travel with the session they belong to.
+            estimate = None
+            try:
+                room = app.state.store.get(session.scene_id).room(session.room_id)
+                minx, miny, maxx, maxy = room.bounds
+                estimate = {
+                    "width_mm": maxx - minx,
+                    "depth_mm": maxy - miny,
+                    "ceiling_mm": room.ceiling_height_mm,
+                    "area_m2": round((maxx - minx) * (maxy - miny) / 1_000_000, 2),
+                    "dimension_source": "estimated_prior",
+                    "caveat": (
+                        "Dimensions are ESTIMATED from typical room sizes, not "
+                        "measured. Quantities and costs derived from them are "
+                        "indicative only and must be confirmed against a real "
+                        "measurement before ordering."
+                    ),
+                }
+            except KeyError:
+                estimate = None
+
             return {
                 "session_id": session.id,
+                "scene_id": session.scene_id,
+                "room_id": session.room_id,
+                "title": session.title,
                 "detections": session.detections,
                 "current_image_ref": svc.current_image(session),
                 "swapped_skus": svc.swapped_skus(session),
+                "location": session.location or {},
+                "questionnaire": session.questionnaire or {},
+                "estimate": estimate,
                 "steps": [
                     {
                         "step_id": s.id,
@@ -1973,6 +2058,7 @@ def create_app(
                         swap_count=len(svc.swapped_skus(row)),
                         step_count=len(row.steps),
                         created_at=row.created_at.isoformat() if row.created_at else None,
+                        thumbnail_url=f"/edit-sessions/{row.id}/thumbnail",
                     )
                 )
         return S.SessionListOut(sessions=summaries)
@@ -2019,6 +2105,42 @@ def create_app(
                 created_at=row.created_at.isoformat() if row.created_at else None,
             )
 
+    @router.post("/auth/me/sessions/claim", response_model=S.SessionClaimBatchOut)
+    def claim_sessions(body: S.SessionClaimBatchIn, request: Request) -> S.SessionClaimBatchOut:
+        """Adopt several sessions in one request.
+
+        Unlike the single-session claim this never raises for an individual
+        id: a sweep that aborts on the first session belonging to somebody
+        else would leave the rest of a person's designs unadopted. Each id is
+        reported instead, and the caller decides what to do about it.
+
+        Already-owned ids come back as claimed, so re-running the sweep is
+        harmless.
+        """
+        from ..db.catalogue import EditSession
+
+        user = _require_user(request)
+        claimed: list[str] = []
+        not_yours: list[str] = []
+        missing: list[str] = []
+
+        with app.state.db_sessionmaker() as db:
+            for session_id in dict.fromkeys(body.session_ids):
+                row = db.get(EditSession, session_id)
+                if row is None:
+                    missing.append(session_id)
+                    continue
+                if row.user_id and row.user_id != user.id:
+                    not_yours.append(session_id)
+                    continue
+                row.user_id = user.id
+                claimed.append(session_id)
+            db.commit()
+
+        return S.SessionClaimBatchOut(
+            claimed=claimed, not_yours=not_yours, missing=missing
+        )
+
     @router.delete("/auth/me/sessions/{session_id}")
     def forget_session(session_id: str, request: Request) -> dict:
         """Remove a design from the account's list.
@@ -2042,6 +2164,191 @@ def create_app(
             row.user_id = None
             db.commit()
         return {"session_id": session_id, "removed": True}
+
+
+    # ---- google sign-in ----------------------------------------------
+
+    def _google_or_503():
+        from . import google_oauth as g
+
+        if not g.configured() or not g.public_base_url():
+            raise HTTPException(
+                503,
+                {"code": "google_not_configured",
+                 "message": "Google sign-in is not set up on this server."},
+            )
+        return g
+
+    @router.get("/auth/google/start")
+    def google_start(redirect: str) -> Response:
+        """Send the browser to Google.
+
+        `redirect` is the app's own deep link, carried through Google inside a
+        signed `state` -- it is the only channel that survives the round trip,
+        and signing it stops anyone pointing the hand-off somewhere else.
+        """
+        from fastapi.responses import RedirectResponse
+
+        from ..db.auth import token_secret
+
+        g = _google_or_503()
+        if not redirect.strip():
+            raise HTTPException(422, "a redirect is required")
+        state = g.encode_state(redirect.strip(), token_secret())
+        return RedirectResponse(g.authorisation_url(state), status_code=302)
+
+    @router.get("/auth/google/callback")
+    def google_callback(
+        request: Request,
+        state: str = "",
+        code: str = "",
+        error: str = "",
+    ) -> Response:
+        """Where Google sends the browser back.
+
+        Ends in a redirect to the app either way: a failure the person can read
+        beats a blank browser tab they have to work out how to leave.
+        """
+        import uuid as _uuid
+
+        from fastapi.responses import RedirectResponse
+        from sqlalchemy import select as _select
+
+        from ..db.auth import UserRow, token_secret
+        from ..db.favourites import OAuthExchangeRow
+
+        g = _google_or_503()
+        app_redirect = g.decode_state(state, token_secret())
+        if not app_redirect:
+            raise HTTPException(400, "that sign-in link has expired; start again")
+
+        if error or not code:
+            return RedirectResponse(
+                g.append_code(app_redirect, "").replace("code=", "error=") + (error or "cancelled"),
+                status_code=302,
+            )
+
+        try:
+            tokens = g.exchange_code(code)
+            claims = g.verify_id_token(tokens.get("id_token") or "")
+            sub, email, name = g.identity(claims)
+        except g.GoogleError as exc:
+            raise HTTPException(400, {"code": "google_failed", "message": str(exc)})
+
+        with app.state.db_sessionmaker() as db:
+            user = db.execute(
+                _select(UserRow).where(UserRow.google_sub == sub)
+            ).scalar_one_or_none()
+            if user is None:
+                # Same person, arriving a different way: link Google to the
+                # existing email rather than creating a second account they
+                # would then have to notice and reconcile.
+                user = db.execute(
+                    _select(UserRow).where(UserRow.email == email)
+                ).scalar_one_or_none()
+            if user is None:
+                user = UserRow(
+                    id=_uuid.uuid4().hex,
+                    email=email,
+                    display_name=name,
+                    password_hash=None,
+                    google_sub=sub,
+                    active=1,
+                )
+                db.add(user)
+            else:
+                user.google_sub = sub
+                if not user.display_name and name:
+                    user.display_name = name
+            db.flush()
+
+            handover, expires = g.new_exchange_code()
+            db.add(
+                OAuthExchangeRow(code=handover, user_id=user.id, expires_at=expires)
+            )
+            db.commit()
+
+        return RedirectResponse(g.append_code(app_redirect, handover), status_code=302)
+
+    @router.post("/auth/google/exchange", response_model=S.AuthOut)
+    def google_exchange(body: S.GoogleExchangeIn) -> S.AuthOut:
+        """Trade the one-time code for a bearer token.
+
+        Single use and short lived: the code travelled through a deep link, and
+        anything that travels in a URL should stop working almost immediately.
+        """
+        from datetime import datetime, timezone
+
+        from ..db.auth import UserRow
+        from ..db.favourites import OAuthExchangeRow
+
+        rejection = HTTPException(
+            400,
+            {"code": "bad_exchange",
+             "message": "That sign-in has already been used or has expired."},
+        )
+
+        with app.state.db_sessionmaker() as db:
+            row = db.get(OAuthExchangeRow, body.code)
+            if row is None or row.used:
+                raise rejection
+            expires = row.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < datetime.now(timezone.utc):
+                raise rejection
+            row.used = 1
+            user = db.get(UserRow, row.user_id)
+            if user is None or not user.active:
+                raise rejection
+            user.last_login_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
+        return _auth_out(user)
+
+    # ---- saved products ----------------------------------------------
+
+    @router.get("/auth/me/favourites", response_model=S.FavouritesOut)
+    def list_favourites(request: Request) -> S.FavouritesOut:
+        from sqlalchemy import select as _select
+
+        from ..db.favourites import FavouriteRow
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            rows = list(
+                db.execute(
+                    _select(FavouriteRow)
+                    .where(FavouriteRow.user_id == user.id)
+                    .order_by(FavouriteRow.created_at.desc())
+                ).scalars()
+            )
+        return S.FavouritesOut(skus=[r.sku for r in rows])
+
+    @router.post("/auth/me/favourites", response_model=S.FavouritesOut)
+    def add_favourite(body: S.FavouriteIn, request: Request) -> S.FavouritesOut:
+        """Save a product. Saving one already saved is not an error."""
+        from ..db.favourites import FavouriteRow
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            if db.get(FavouriteRow, (user.id, body.sku)) is None:
+                db.add(FavouriteRow(user_id=user.id, sku=body.sku))
+                db.commit()
+        return list_favourites(request)
+
+    @router.delete("/auth/me/favourites/{sku}", response_model=S.FavouritesOut)
+    def remove_favourite(sku: str, request: Request) -> S.FavouritesOut:
+        from ..db.favourites import FavouriteRow
+
+        user = _require_user(request)
+        with app.state.db_sessionmaker() as db:
+            row = db.get(FavouriteRow, (user.id, sku))
+            if row is not None:
+                db.delete(row)
+                db.commit()
+        return list_favourites(request)
 
     # ---- operator console -------------------------------------------
 

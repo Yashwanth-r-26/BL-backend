@@ -512,6 +512,8 @@ class SessionSummaryOut(BaseModel):
     swap_count: int = 0
     step_count: int = 0
     created_at: str | None = None
+    #: Path to a small JPEG of the current image. Prefix the API base.
+    thumbnail_url: str | None = None
 
 
 class SessionListOut(BaseModel):
@@ -549,3 +551,60 @@ class SessionClaimIn(BaseModel):
 
     session_id: str
     title: str | None = Field(default=None, max_length=120)
+
+
+class SessionClaimBatchIn(BaseModel):
+    """Adopt several sessions at once.
+
+    A client that has been used signed-out accumulates local designs, and on
+    sign-in every one of them needs adopting. One request per session is a
+    round trip per design on whatever connection the person happens to have;
+    this is the same work in one.
+    """
+
+    session_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class SessionClaimBatchOut(BaseModel):
+    """What happened to each id.
+
+    Split three ways because the client acts differently on each: `claimed`
+    are now the caller's, `not_yours` belong to somebody else, and `missing`
+    no longer exist. The last two are what let a device prune local pointers
+    that can never resolve, instead of retrying them on every launch.
+    """
+
+    claimed: list[str] = []
+    not_yours: list[str] = []
+    missing: list[str] = []
+
+
+class GoogleExchangeIn(BaseModel):
+    """Trade the one-time code from the deep link for a bearer token."""
+
+    code: str = Field(min_length=8, max_length=128)
+
+
+class FavouritesOut(BaseModel):
+    """The account's saved SKUs, newest first."""
+
+    skus: list[str] = []
+
+
+class FavouriteIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+
+
+class RoomEstimateOut(BaseModel):
+    """The room's estimated geometry, carried with its caveat.
+
+    Sent alongside a session so a client does not have to keep its own copy of
+    numbers it must never present as measurements.
+    """
+
+    width_mm: int
+    depth_mm: int
+    ceiling_mm: int
+    area_m2: float
+    dimension_source: str
+    caveat: str
