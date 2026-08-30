@@ -518,6 +518,32 @@ class SessionListOut(BaseModel):
     sessions: list[SessionSummaryOut] = []
 
 
+class ProfileUpdateIn(BaseModel):
+    """What an account holder may change about themselves.
+
+    Display name only. Email is the login identifier and changing it needs a
+    verification round trip that does not exist yet; the password needs the
+    current one to be re-entered. Both are deliberate omissions rather than
+    oversights -- a profile endpoint that silently accepts a new email would be
+    an account-takeover vector.
+    """
+
+    display_name: str = Field(max_length=80)
+
+
+class PasswordUpdateIn(BaseModel):
+    """Change a password.
+
+    The current one is required even though the caller already holds a valid
+    token. A token is something a thief can have; the password is the thing
+    only the owner should know, and without re-proving it a stolen token would
+    be enough to lock the real owner out of their own account.
+    """
+
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+
+
 class SessionClaimIn(BaseModel):
     """Attach an existing session to the caller's account."""
 
